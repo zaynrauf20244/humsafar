@@ -1,0 +1,18 @@
+{
+  "name": "Saath — Commute Circles",
+  "short_name": "Saath",
+  "description": "Verified driver and passenger matching for recurring daily commutes.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f8fafc",
+  "theme_color": "#0f4c81",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
