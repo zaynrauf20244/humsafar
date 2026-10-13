@@ -36,6 +36,12 @@ import type {
   Weekday,
 } from "./types";
 import { commuteMeta } from "./commute-types";
+import {
+  looksLikePkPhone,
+  redactPhoneNumbers,
+  riderBlockedFromWomenRoute,
+  womenRouteDriverOk,
+} from "./safety";
 
 const STORAGE_KEY = "humsafar-auth-v2";
 
@@ -464,8 +470,15 @@ export function HumSafarProvider({ children }: { children: ReactNode }) {
         input.commuteType === "women" || meta.womenOnly
           ? "women"
           : input.category;
-      if (genderCat === "women" && me.gender !== "female") {
-        return { ok: false, error: "Women-only needs a woman car owner" };
+      if (
+        genderCat === "women" &&
+        !womenRouteDriverOk({
+          gender: me.gender,
+          cnicStatus: me.cnicStatus,
+          banned: me.banned,
+        })
+      ) {
+        return { ok: false, error: "Women-only needs an approved woman car owner" };
       }
       const { min, max } = suggestRate(
         input.from,
@@ -554,14 +567,19 @@ export function HumSafarProvider({ children }: { children: ReactNode }) {
         if (category !== "all" && r.category !== category) return false;
         if (
           (category === "women" || r.commuteType === "women") &&
-          (driver.gender !== "female" || driver.cnicStatus !== "approved")
+          !womenRouteDriverOk(driver)
         )
           return false;
         if (me && canRide(me.role) && me.gender === "female" && r.category === "men")
           return false;
-        if (me && canRide(me.role) && me.gender === "male" && r.category === "women")
-          return false;
-        if (me && canRide(me.role) && me.gender === "male" && r.commuteType === "women")
+        if (
+          me &&
+          canRide(me.role) &&
+          riderBlockedFromWomenRoute(me, {
+            category: r.category,
+            commuteType: r.commuteType,
+          })
+        )
           return false;
         const fromOk = !f || r.from.toLowerCase().includes(f);
         const toOk = !t || r.to.toLowerCase().includes(t);
@@ -580,6 +598,14 @@ export function HumSafarProvider({ children }: { children: ReactNode }) {
       const route = state.routes.find((r) => r.id === routeId);
       if (!route || route.seatsLeft < 1)
         return { ok: false, error: "No seats left" };
+      if (
+        riderBlockedFromWomenRoute(me, {
+          category: route.category,
+          commuteType: route.commuteType,
+        })
+      ) {
+        return { ok: false, error: "Women-only seat" };
+      }
       const clash = state.bookings.some(
         (b) =>
           b.passengerId === me.id &&
@@ -844,7 +870,10 @@ export function HumSafarProvider({ children }: { children: ReactNode }) {
   const sendChat = useCallback(
     (chatId: string, text: string) => {
       if (!me || !text.trim()) return { ok: false };
-      const phoneLike = /\b03\d{9}\b|\+\s*92/.test(text);
+      const phoneLike = looksLikePkPhone(text);
+      const safeText = phoneLike
+        ? redactPhoneNumbers(text.trim())
+        : text.trim();
       setState((s) => ({
         ...s,
         chats: s.chats.map((c) =>
@@ -857,7 +886,7 @@ export function HumSafarProvider({ children }: { children: ReactNode }) {
                   {
                     id: uid("m"),
                     senderId: me.id,
-                    text: text.trim(),
+                    text: safeText,
                     at: new Date().toLocaleTimeString(),
                   },
                 ],
