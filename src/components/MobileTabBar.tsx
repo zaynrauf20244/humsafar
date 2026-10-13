@@ -2,142 +2,68 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useSaath } from "@/lib/store";
+import {
+  Home,
+  LayoutGrid,
+  MessageCircle,
+  Route,
+  UserRound,
+} from "lucide-react";
+import { useHumSafar } from "@/lib/store";
 
-/** Bottom tabs — mobile only. Desktop uses top nav. */
 export function MobileTabBar() {
   const pathname = usePathname();
-  const { joinedCircleId, profile } = useSaath();
+  const { me } = useHumSafar();
 
-  const hide = pathname.startsWith("/register");
-  if (hide) return null;
+  if (
+    !me ||
+    me.role === "admin" ||
+    pathname.startsWith("/login") ||
+    pathname.startsWith("/onboarding") ||
+    pathname.startsWith("/splash") ||
+    pathname.startsWith("/intro") ||
+    pathname.startsWith("/admin") ||
+    pathname.startsWith("/join")
+  ) {
+    return null;
+  }
 
   const tabs = [
-    {
-      href: "/",
-      label: "Home",
-      match: (p: string) => p === "/",
-      icon: HomeIcon,
-    },
-    {
-      href: profile ? "/match" : "/",
-      label: "Circles",
-      match: (p: string) => p.startsWith("/match"),
-      icon: CirclesIcon,
-    },
-    {
-      href: joinedCircleId ? `/circle/${joinedCircleId}` : "/match",
-      label: "My Circle",
-      match: (p: string) => p.startsWith("/circle"),
-      icon: SaathIcon,
-    },
-    {
-      href: "/credits",
-      label: "Credits",
-      match: (p: string) => p.startsWith("/credits"),
-      icon: CreditsIcon,
-    },
+    { href: "/", label: "Home", icon: Home },
+    { href: "/circles", label: "Circles", icon: LayoutGrid },
+    { href: "/rides", label: "Rides", icon: Route },
+    { href: "/chat", label: "Chat", icon: MessageCircle },
+    { href: "/profile", label: "You", icon: UserRound },
   ];
 
   return (
     <nav
-      className="fixed bottom-0 left-0 z-50 w-full border-t border-line bg-surface md:hidden"
+      className="fixed inset-x-0 bottom-0 z-50 border-t border-line bg-white/95 backdrop-blur-md md:hidden"
       style={{ paddingBottom: "var(--safe-bottom)" }}
-      aria-label="Mobile navigation"
+      aria-label="Main"
     >
-      <ul className="grid h-16 grid-cols-4">
+      <ul className="grid h-[68px] grid-cols-5">
         {tabs.map((tab) => {
-          const active = tab.match(pathname);
+          const active =
+            tab.href === "/"
+              ? pathname === "/"
+              : pathname.startsWith(tab.href);
           const Icon = tab.icon;
           return (
-            <li key={tab.label}>
+            <li key={tab.href}>
               <Link
                 href={tab.href}
-                className={`flex h-full flex-col items-center justify-center gap-0.5 text-[11px] font-semibold ${
-                  active ? "text-accent" : "text-muted"
+                className={`flex h-full min-h-[44px] flex-col items-center justify-center gap-0.5 text-12 font-semibold ${
+                  active ? "text-teal" : "text-muted"
                 }`}
               >
-                <Icon active={active} />
-                {tab.label}
+                <Icon className="size-6" strokeWidth={active ? 2.4 : 1.8} />
+                <span className="truncate px-0.5">{tab.label}</span>
               </Link>
             </li>
           );
         })}
       </ul>
     </nav>
-  );
-}
-
-function HomeIcon({ active }: { active: boolean }) {
-  return (
-    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden>
-      <path
-        d="M4 10.5 12 4l8 6.5V20a1 1 0 0 1-1 1h-5v-6H10v6H5a1 1 0 0 1-1-1v-9.5Z"
-        stroke={active ? "var(--accent)" : "currentColor"}
-        strokeWidth="1.8"
-        strokeLinejoin="round"
-      />
-    </svg>
-  );
-}
-
-function CirclesIcon({ active }: { active: boolean }) {
-  return (
-    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden>
-      <circle
-        cx="9"
-        cy="12"
-        r="5"
-        stroke={active ? "var(--accent)" : "currentColor"}
-        strokeWidth="1.8"
-      />
-      <circle
-        cx="15"
-        cy="12"
-        r="5"
-        stroke={active ? "var(--accent)" : "currentColor"}
-        strokeWidth="1.8"
-      />
-    </svg>
-  );
-}
-
-function SaathIcon({ active }: { active: boolean }) {
-  return (
-    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden>
-      <path
-        d="M8 18v-1a4 4 0 0 1 4-4h0a4 4 0 0 1 4 4v1"
-        stroke={active ? "var(--accent)" : "currentColor"}
-        strokeWidth="1.8"
-        strokeLinecap="round"
-      />
-      <circle
-        cx="12"
-        cy="8"
-        r="3"
-        stroke={active ? "var(--accent)" : "currentColor"}
-        strokeWidth="1.8"
-      />
-    </svg>
-  );
-}
-
-function CreditsIcon({ active }: { active: boolean }) {
-  return (
-    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden>
-      <circle
-        cx="12"
-        cy="12"
-        r="8"
-        stroke={active ? "var(--accent)" : "currentColor"}
-        strokeWidth="1.8"
-      />
-      <path
-        d="M12 7v10M9.5 9.5c.5-1 1.5-1.5 2.5-1.5s2 .6 2 1.75-1 1.5-2.5 1.9-2.5.7-2.5 1.9 1 1.75 2.5 1.75 2-.5 2.5-1.5"
-        stroke={active ? "var(--accent)" : "currentColor"}
-        strokeWidth="1.8"
-        strokeLinecap="round"
-      />
-    </svg>
   );
 }

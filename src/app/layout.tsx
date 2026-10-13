@@ -1,43 +1,68 @@
 import type { Metadata, Viewport } from "next";
-import { Source_Sans_3, Source_Serif_4 } from "next/font/google";
+import { Suspense } from "react";
+import {
+  Bricolage_Grotesque,
+  DM_Sans,
+  Noto_Naskh_Arabic,
+  Noto_Nastaliq_Urdu,
+} from "next/font/google";
 import { AppShell } from "@/components/AppShell";
-import { SaathProvider } from "@/lib/store";
+import { ToastProvider } from "@/components/ui";
+import { HumSafarProvider } from "@/lib/store";
 import "./globals.css";
 
-const display = Source_Serif_4({
+const display = Bricolage_Grotesque({
   variable: "--font-display",
   subsets: ["latin"],
-  weight: ["600", "700"],
+  weight: ["600", "700", "800"],
 });
 
-const body = Source_Sans_3({
+const body = DM_Sans({
   variable: "--font-body",
   subsets: ["latin"],
   weight: ["400", "500", "600", "700"],
 });
 
+const urduDisplay = Noto_Nastaliq_Urdu({
+  variable: "--font-urdu-display",
+  subsets: ["arabic"],
+  weight: ["400", "500", "600", "700"],
+});
+
+const urduBody = Noto_Naskh_Arabic({
+  variable: "--font-urdu-body",
+  subsets: ["arabic"],
+  weight: ["400", "500", "600", "700"],
+});
+
 export const metadata: Metadata = {
-  title: "Saath — Professional commute circles",
+  title: "HumSafar — People already going your way",
   description:
-    "Verified driver and passenger matching for recurring daily commutes.",
-  applicationName: "Saath",
+    "Offer a seat or find a seat. Cost sharing for your daily commute — not a taxi.",
+  applicationName: "HumSafar",
   appleWebApp: {
     capable: true,
     statusBarStyle: "default",
-    title: "Saath",
+    title: "HumSafar",
   },
   manifest: "/manifest.json",
   icons: {
-    icon: "/icon.svg",
-    apple: "/icon.svg",
+    icon: [
+      { url: "/icon.svg", type: "image/svg+xml" },
+      { url: "/icons/icon-192.png", sizes: "192x192", type: "image/png" },
+      { url: "/icons/icon-512.png", sizes: "512x512", type: "image/png" },
+    ],
+    apple: [{ url: "/icons/apple-touch-icon.png", sizes: "180x180" }],
+  },
+  other: {
+    "mobile-web-app-capable": "yes",
   },
 };
 
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
-  maximumScale: 1,
-  themeColor: "#0f4c81",
+  themeColor: "#1F6B4F",
   viewportFit: "cover",
 };
 
@@ -45,12 +70,16 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html
       lang="en"
-      className={`${display.variable} ${body.variable} h-full antialiased`}
+      className={`${display.variable} ${body.variable} ${urduDisplay.variable} ${urduBody.variable} h-full antialiased`}
     >
-      <body className="min-h-full font-sans">
-        <SaathProvider>
-          <AppShell>{children}</AppShell>
-        </SaathProvider>
+      <body className="min-h-full font-sans text-16">
+        <HumSafarProvider>
+          <ToastProvider>
+            <Suspense fallback={<div className="min-h-dvh bg-[var(--leaf-deep)]" />}>
+              <AppShell>{children}</AppShell>
+            </Suspense>
+          </ToastProvider>
+        </HumSafarProvider>
       </body>
     </html>
   );
