@@ -28,11 +28,24 @@ describe("priceTag", () => {
 });
 
 describe("suggestRate", () => {
-  it("stays within admin bounds", () => {
-    const s = suggestRate("Bahria", "Gulberg", { minRate: 150, maxRate: 2000 });
-    expect(s.min).toBeGreaterThanOrEqual(150);
-    expect(s.max).toBeLessThanOrEqual(2000);
+  it("stays within admin suggestion bounds", () => {
+    const s = suggestRate("Bahria", "Gulberg", { minRate: 50, maxRate: 5000 });
+    expect(s.min).toBeGreaterThanOrEqual(50);
+    expect(s.max).toBeLessThanOrEqual(5000);
     expect(s.mid).toBeGreaterThanOrEqual(s.min);
     expect(s.mid).toBeLessThanOrEqual(s.max);
+  });
+
+  it("uses known map km when provided", () => {
+    const s = suggestRate(
+      "A",
+      "B",
+      { minRate: 50, maxRate: 5000 },
+      50,
+      2,
+      20
+    );
+    expect(s.km).toBe(20);
+    expect(s.mid).toBe(500);
   });
 });

@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
+import { LiveModeBadge } from "@/components/LiveModeBadge";
 import { useHumSafar } from "@/lib/store";
 
 export function AppNav() {
@@ -40,6 +41,9 @@ export function AppNav() {
               <NavLink href="/rides" active={pathname.startsWith("/rides")}>
                 My rides
               </NavLink>
+              <NavLink href="/wallet" active={pathname.startsWith("/wallet")}>
+                Credits
+              </NavLink>
               <NavLink href="/chat" active={pathname.startsWith("/chat")}>
                 Chat
               </NavLink>
@@ -53,6 +57,7 @@ export function AppNav() {
         </nav>
 
         <div className="flex items-center gap-2">
+          <LiveModeBadge className="hidden sm:inline-flex" />
           <button
             type="button"
             className="min-h-11 rounded-[12px] border border-line bg-white px-3 text-12 font-bold"
@@ -60,6 +65,14 @@ export function AppNav() {
           >
             {locale === "en" ? "اردو" : "EN"}
           </button>
+          {me && me.role !== "admin" ? (
+            <Link
+              href="/wallet"
+              className="hidden min-h-11 items-center rounded-[12px] bg-teal-soft px-3 text-12 font-bold text-teal-deep sm:inline-flex"
+            >
+              Rs {me.walletBalance.toLocaleString()}
+            </Link>
+          ) : null}
           {me ? (
             <button
               type="button"

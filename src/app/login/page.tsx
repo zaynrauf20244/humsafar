@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { AuthPictureSlider } from "@/components/AuthPictureSlider";
+import { LiveModeBadge } from "@/components/LiveModeBadge";
 import { COMMUTE_TYPES, type CommuteType } from "@/lib/commute-types";
 import { COMMUTE_IMAGES } from "@/lib/commute-media";
 import {
@@ -12,7 +13,47 @@ import {
   formatPkPhone,
   normalizeCnic,
 } from "@/lib/seed";
-import { useHumSafar } from "@/lib/store";
+import { homeModeForUser, useHumSafar } from "@/lib/store";
+import type { UserRole, VehicleKind } from "@/lib/types";
+
+type SignupPersona = {
+  id: string;
+  role: Exclude<UserRole, "admin">;
+  kind: VehicleKind | null;
+  label: string;
+  hint: string;
+};
+
+const ROLE_OPTIONS: SignupPersona[] = [
+  {
+    id: "passenger",
+    role: "passenger",
+    kind: null,
+    label: "Passenger",
+    hint: "Find a seat",
+  },
+  {
+    id: "car_owner",
+    role: "driver",
+    kind: "car",
+    label: "Car owner",
+    hint: "Offer car seats",
+  },
+  {
+    id: "bike_owner",
+    role: "driver",
+    kind: "bike",
+    label: "Bike owner",
+    hint: "Offer bike rides",
+  },
+  {
+    id: "both",
+    role: "both",
+    kind: "car",
+    label: "Both",
+    hint: "Some days each",
+  },
+];
 
 const DEMOS = [
   {
@@ -21,9 +62,14 @@ const DEMOS = [
     label: "Car owner",
   },
   {
+    phone: "03001112233",
+    cnic: "3520211223345",
+    label: "Bike owner",
+  },
+  {
     phone: "03009876543",
     cnic: "3520299887763",
-    label: "Rider",
+    label: "Passenger",
   },
 ];
 
@@ -48,8 +94,8 @@ const STEPS = [
     body: "Office, uni, women-only, society, school, inter-city, airport, or events.",
   },
   {
-    title: "Find or offer a seat",
-    body: "Match with someone already going your way. You set or see the seat price.",
+    title: "Passenger finds · Owners offer",
+    body: "Car or bike — match with someone already going your way.",
   },
   {
     title: "Ride together",
@@ -88,6 +134,8 @@ export default function LoginPage() {
   const {
     requestOtp,
     verifyOtp,
+    setPendingRole,
+    setPendingVehicleKind,
     pendingPhone,
     otp,
     me,
@@ -101,6 +149,9 @@ export default function LoginPage() {
   const [mode, setMode] = useState<AuthMode>("signin");
   const [phone, setPhone] = useState("");
   const [cnic, setCnic] = useState("");
+  const [personaId, setPersonaId] = useState("passenger");
+  const persona =
+    ROLE_OPTIONS.find((p) => p.id === personaId) || ROLE_OPTIONS[0];
   const [code, setCode] = useState("");
   const [terms, setTerms] = useState(true);
   const [error, setError] = useState("");
@@ -122,7 +173,9 @@ export default function LoginPage() {
   useEffect(() => {
     if (!hydrated || !me) return;
     router.replace(
-      me.role === "admin" ? "/admin" : `/?type=${commuteType}&mode=find`
+      me.role === "admin"
+        ? "/admin"
+        : `/?type=${commuteType}&mode=${homeModeForUser(me)}`
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hydrated, me, router]);
@@ -147,6 +200,10 @@ export default function LoginPage() {
       setError("Please accept Terms & Privacy");
       return;
     }
+    if (nextMode === "signup" && !persona.role) {
+      setError("Choose Passenger, Car owner, or Bike owner");
+      return;
+    }
     const res = requestOtp(nextPhone, {
       intent: nextMode,
       cnic: nextCnic,
@@ -154,6 +211,13 @@ export default function LoginPage() {
     if (!res.ok) {
       setError(otpErrorMessage(res.error));
       return;
+    }
+    if (nextMode === "signup") {
+      setPendingRole(persona.role);
+      setPendingVehicleKind(persona.kind);
+    } else {
+      setPendingRole(null);
+      setPendingVehicleKind(null);
     }
     setPhone(nextPhone);
     setCnic(normalizeCnic(nextCnic));
@@ -169,9 +233,12 @@ export default function LoginPage() {
       setError(otpErrorMessage(res.error));
       return;
     }
-    const next = `/?type=${commuteType}&mode=find`;
-    if (res.needsProfile) router.push(`/join?type=${commuteType}`);
-    else router.push(next);
+    if (res.needsProfile) {
+      router.push(`/join?type=${commuteType}`);
+      return;
+    }
+    // No mode= — home picks Offer for car owners, Find for riders
+    router.push(`/?type=${commuteType}`);
   }
 
   return (
@@ -183,6 +250,7 @@ export default function LoginPage() {
             HumSafar
           </Link>
           <div className="uber-nav-actions">
+            <LiveModeBadge />
             <button
               type="button"
               className="uber-pill-ghost"
@@ -274,6 +342,41 @@ export default function LoginPage() {
                   />
                 </label>
 
+                {mode === "signup" ? (
+                  <div>
+                    <span className="field-label !mb-1.5">
+                      How will you use HumSafar?
+                    </span>
+                    <div className="grid grid-cols-2 gap-2">
+                      {ROLE_OPTIONS.map((opt) => (
+                        <button
+                          key={opt.id}
+                          type="button"
+                          className={`rounded-xl border px-2 py-3 text-center transition ${
+                            personaId === opt.id
+                              ? "border-black bg-black text-white"
+                              : "border-[var(--uber-line)] bg-[var(--uber-soft)] text-black"
+                          }`}
+                          onClick={() => setPersonaId(opt.id)}
+                        >
+                          <p className="text-13 font-bold leading-tight">
+                            {opt.label}
+                          </p>
+                          <p
+                            className={`mt-0.5 text-[11px] leading-tight ${
+                              personaId === opt.id
+                                ? "text-white/70"
+                                : "text-[var(--uber-mute)]"
+                            }`}
+                          >
+                            {opt.hint}
+                          </p>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+
                 <label className="flex items-start gap-2 text-14 text-[var(--uber-mute)]">
                   <input
                     type="checkbox"
@@ -331,8 +434,8 @@ export default function LoginPage() {
                   </div>
                 ) : (
                   <p className="text-12 text-[var(--uber-mute)]">
-                    After OTP you’ll finish name, selfie, and role. CNIC stays
-                    locked to this account.
+                    After OTP you’ll finish name and selfie. CNIC stays locked
+                    to this account.
                   </p>
                 )}
               </div>
@@ -346,7 +449,9 @@ export default function LoginPage() {
                 </p>
                 <p className="text-12 text-[var(--uber-mute)]">
                   CNIC {formatCnic(cnic)} ·{" "}
-                  {mode === "signup" ? "Sign up" : "Sign in"}
+                  {mode === "signup"
+                    ? `Sign up · ${persona.label}`
+                    : "Sign in"}
                 </p>
                 <input
                   className="uber-input text-center text-26 tracking-[0.35em]"
@@ -450,10 +555,10 @@ export default function LoginPage() {
           />
         </div>
         <div className="uber-offer-copy">
-          <h2 className="uber-h2">Drive when you want. Share what you need.</h2>
+          <h2 className="uber-h2">Car or bike owner? Share empty seats.</h2>
           <p className="uber-section-lead">
-            Already driving to work or campus? Offer empty seats, set your own
-            price, and keep company on the road.
+            Already going to work or campus? Offer seats on your car or bike,
+            set your own price, and keep company on the road.
           </p>
           <a href="#start" className="uber-pill-dark inline-flex">
             Get started

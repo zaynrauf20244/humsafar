@@ -46,13 +46,19 @@ export interface EmergencyContact {
   tested?: boolean;
 }
 
+export type VehicleKind = "car" | "bike";
+
 export interface Vehicle {
+  kind: VehicleKind;
   make: string;
   model: string;
   year: number;
   color: string;
   plate: string;
   seats: number;
+  /** Admin must approve before owner can offer seats */
+  status: VerifyStatus;
+  rejectReason?: string;
   photoName?: string;
   regBookName?: string;
 }
@@ -79,6 +85,8 @@ export interface User {
   rating: number;
   ratingCount: number;
   walletBalance: number;
+  /** Chosen at signup (Car owner / Bike owner) before vehicle is registered */
+  preferredVehicleKind?: VehicleKind;
   vehicle?: Vehicle;
   licence?: Licence;
   emergencyContacts: EmergencyContact[];
@@ -97,6 +105,13 @@ export interface RoutePost {
   driverId: string;
   from: string;
   to: string;
+  /** Optional map coordinates (OpenStreetMap) */
+  fromLat?: number;
+  fromLng?: number;
+  toLat?: number;
+  toLng?: number;
+  distanceKm?: number;
+  durationMin?: number;
   direction: "home_to_office" | "office_to_home";
   time: string;
   flexMinutes: number;
@@ -111,6 +126,8 @@ export interface RoutePost {
   commuteType: CommuteType;
   /** Optional label: company, uni, school, event name */
   placeLabel?: string;
+  /** Car or bike ride (defaults to car for older rows) */
+  vehicleKind?: VehicleKind;
   rate: number;
   suggestedMin: number;
   suggestedMax: number;
@@ -248,6 +265,8 @@ export interface AppState {
   /** What the user started on the auth screen */
   authIntent: "signin" | "signup" | null;
   pendingRole: UserRole | null;
+  /** Car vs bike for new owners at sign-up */
+  pendingVehicleKind: VehicleKind | null;
   savedPlaces: Record<string, SavedPlace[]>;
   introDone: boolean;
   adminStepOk: boolean;

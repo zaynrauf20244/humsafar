@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 import { ArrowRight, MapPin } from "lucide-react";
 import { CommuteTypeBadge } from "@/components/CommuteTypePicker";
 import { HeroCommuteSlider } from "@/components/HeroCommuteSlider";
+import { RouteMap } from "@/components/RouteMap";
 import {
   Avatar,
   Badge,
@@ -18,8 +19,14 @@ import {
 } from "@/components/ui";
 import { commuteMeta, type CommuteType } from "@/lib/commute-types";
 import { priceTag, riderPays, suggestRate } from "@/lib/pricing";
-import { effectiveRole, useHumSafar, useUser } from "@/lib/store";
-import type { Weekday } from "@/lib/types";
+import {
+  canOfferSeats,
+  ownerDashboardLabel,
+  vehicleKindOf,
+  vehicleVerifyStatus,
+} from "@/lib/roles";
+import { homeModeForUser, useHumSafar, useUser } from "@/lib/store";
+import type { User, VehicleKind, Weekday } from "@/lib/types";
 
 type Mode = "offer" | "find";
 
@@ -49,10 +56,11 @@ export default function HomePage() {
     settings,
   } = useHumSafar();
   const router = useRouter();
-  const role = effectiveRole(me);
   const [booting, setBooting] = useState(true);
   const [mode, setMode] = useState<Mode>("find");
   const [commuteType, setCommuteType] = useState<CommuteType>("office");
+  const [modeFromUrl, setModeFromUrl] = useState(false);
+  const [rideKind, setRideKind] = useState<VehicleKind>("car");
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -60,7 +68,10 @@ export default function HomePage() {
     const t = q.get("type") as CommuteType | null;
     const m = q.get("mode") as Mode | null;
     if (t && TYPE_IDS.includes(t)) setCommuteType(t);
-    if (m === "offer" || m === "find") setMode(m);
+    if (m === "offer" || m === "find") {
+      setMode(m);
+      setModeFromUrl(true);
+    }
   }, []);
 
   useEffect(() => {
@@ -77,17 +88,15 @@ export default function HomePage() {
       router.replace("/admin");
       return;
     }
-    if (!window.location.search.includes("mode=")) {
-      const start: Mode =
-        role === "driver" || me.role === "driver" || me.role === "both"
-          ? me.activeRole === "driver"
-            ? "offer"
-            : "find"
-          : "find";
-      setMode(start);
+    // Pure car owners always start on Offer; pure riders on Find.
+    // Only "both" keeps an explicit ?mode= from the URL.
+    if (me.role === "both" && modeFromUrl) {
+      /* keep URL mode */
+    } else {
+      setMode(homeModeForUser(me));
     }
     setBooting(false);
-  }, [hydrated, introDone, me, router, role]);
+  }, [hydrated, introDone, me, router, modeFromUrl]);
 
   useEffect(() => {
     if (!me || me.role !== "both") return;
@@ -106,6 +115,17 @@ export default function HomePage() {
 
   const first = me.name.split(" ")[0];
   const meta = commuteMeta(commuteType);
+  const ownerKind = vehicleKindOf(me);
+  const isOwnerDash = mode === "offer";
+  const canSwitch = me.role === "both";
+  const dashLabel = isOwnerDash
+    ? ownerDashboardLabel(ownerKind)
+    : "Passenger dashboard";
+  const dashHint = isOwnerDash
+    ? ownerKind === "bike"
+      ? "Offer a bike seat on your road."
+      : "Offer empty car seats on your road."
+    : "Choose car or bike, then find a verified seat.";
 
   return (
     <main className="page space-y-5">
@@ -115,12 +135,25 @@ export default function HomePage() {
         style={{ background: meta.tone }}
       >
         <div className="commute-hero-body">
-          <p className="text-14 font-semibold text-white/75">Hi {first}</p>
+          <p className="text-14 font-semibold text-white/75">
+            Hi {first}
+            <span className="ms-2 rounded-full bg-white/20 px-2.5 py-0.5 text-12 font-bold tracking-wide text-white">
+              {dashLabel}
+            </span>
+          </p>
           <h1 className="mt-3 font-display text-32 font-extrabold leading-[1.15]">
             <span className="hero-highlight">{meta.short}</span>
-            <span className="mt-2 block text-white">{meta.heroLine}</span>
+            <span className="mt-2 block text-white">
+              {isOwnerDash
+                ? ownerKind === "bike"
+                  ? "Your road. Your bike. Share the ride."
+                  : "Your road. Your empty seats. Share them."
+                : meta.heroLine}
+            </span>
           </h1>
-          <p className="mt-3 max-w-sm text-16 text-white/85">{meta.blurb}</p>
+          <p className="mt-3 max-w-sm text-16 text-white/85">
+            {isOwnerDash ? dashHint : meta.blurb}
+          </p>
           <Link
             href="/circles"
             className="mt-5 inline-flex min-h-11 items-center rounded-[14px] bg-[var(--sun)] px-5 text-14 font-bold text-ink"
@@ -131,55 +164,85 @@ export default function HomePage() {
         <HeroCommuteSlider value={commuteType} onChange={setCommuteType} />
       </section>
 
-      <div className="grid grid-cols-2 gap-3">
-        <button
-          type="button"
-          className={`mode-tile ${mode === "find" ? "active" : ""}`}
-          onClick={() => setMode("find")}
-        >
-          <span className="text-12 font-bold uppercase tracking-wide text-teal">
-            Rider
-          </span>
-          <h3>Find a seat</h3>
-          <p className="text-14 text-muted">In {meta.short}</p>
-        </button>
-        <button
-          type="button"
-          className={`mode-tile ${mode === "offer" ? "active" : ""}`}
-          onClick={() => {
-            if (!me.vehicle && me.role === "passenger") {
-              router.push("/driver/setup");
-              return;
-            }
-            setMode("offer");
-          }}
-        >
-          <span className="text-12 font-bold uppercase tracking-wide text-sun">
-            Car owner
-          </span>
-          <h3>Offer a seat</h3>
-          <p className="text-14 text-muted">For {meta.short}</p>
-        </button>
-      </div>
+      <Link
+        href="/wallet"
+        className="card flex items-center justify-between gap-3 !py-4 transition hover:border-teal"
+      >
+        <div>
+          <p className="text-12 font-bold uppercase tracking-wide text-teal">
+            Your credits
+          </p>
+          <p className="mt-0.5 font-display text-26 font-extrabold">
+            Rs {me.walletBalance.toLocaleString()}
+          </p>
+          <p className="text-12 text-muted">Tap for history &amp; top-up</p>
+        </div>
+        <span className="rounded-xl bg-teal-soft px-3 py-2 text-14 font-bold text-teal-deep">
+          Open
+        </span>
+      </Link>
 
-      {mode === "offer" ? (
-        <OfferSeat
-          commuteType={commuteType}
-          routes={routes.filter(
-            (r) =>
-              r.driverId === me.id && r.active && r.commuteType === commuteType
-          )}
-          requests={bookings.filter(
-            (b) => b.driverId === me.id && b.status === "requested"
-          )}
-          postRoute={postRoute}
-          pauseRouteToday={pauseRouteToday}
-          respondBooking={respondBooking}
-          settings={settings}
-        />
+      {canSwitch ? (
+        <div className="grid grid-cols-2 gap-3">
+          <button
+            type="button"
+            className={`mode-tile ${mode === "find" ? "active" : ""}`}
+            onClick={() => setMode("find")}
+          >
+            <span className="text-12 font-bold uppercase tracking-wide text-teal">
+              Passenger
+            </span>
+            <h3>Find a seat</h3>
+            <p className="text-14 text-muted">In {meta.short}</p>
+          </button>
+          <button
+            type="button"
+            className={`mode-tile ${mode === "offer" ? "active" : ""}`}
+            onClick={() => setMode("offer")}
+          >
+            <span className="text-12 font-bold uppercase tracking-wide text-sun">
+              {ownerKind === "bike" ? "Bike owner" : "Car owner"}
+            </span>
+            <h3>Offer a seat</h3>
+            <p className="text-14 text-muted">For {meta.short}</p>
+          </button>
+        </div>
+      ) : (
+        <div className="rounded-2xl border border-black/8 bg-white px-4 py-3">
+          <p className="text-12 font-bold uppercase tracking-wide text-teal">
+            {dashLabel}
+          </p>
+          <p className="mt-1 text-14 text-muted">{dashHint}</p>
+        </div>
+      )}
+
+      {isOwnerDash ? (
+        canOfferSeats(me) ? (
+          <OfferSeat
+            commuteType={commuteType}
+            vehicleKind={ownerKind}
+            routes={routes.filter(
+              (r) =>
+                r.driverId === me.id &&
+                r.active &&
+                r.commuteType === commuteType
+            )}
+            requests={bookings.filter(
+              (b) => b.driverId === me.id && b.status === "requested"
+            )}
+            postRoute={postRoute}
+            pauseRouteToday={pauseRouteToday}
+            respondBooking={respondBooking}
+            settings={settings}
+          />
+        ) : (
+          <OwnerVehicleGate me={me} kind={ownerKind} />
+        )
       ) : (
         <FindSeat
           commuteType={commuteType}
+          rideKind={rideKind}
+          onRideKindChange={setRideKind}
           searchRoutes={searchRoutes}
           settings={settings}
         />
@@ -188,8 +251,97 @@ export default function HomePage() {
   );
 }
 
+function OwnerVehicleGate({ me, kind }: { me: User; kind: VehicleKind }) {
+  const router = useRouter();
+  const label = kind === "bike" ? "bike" : "car";
+  const status = vehicleVerifyStatus(me);
+
+  if (me.cnicStatus !== "approved") {
+    return (
+      <Card className="space-y-3">
+        <h2 className="font-display text-20 font-bold">CNIC under review</h2>
+        <p className="text-14 text-muted">
+          Admin must approve your CNIC before you can register a {label} and
+          offer seats.
+        </p>
+        {me.cnicStatus === "rejected" ? (
+          <p className="text-14 font-semibold text-red">
+            {me.cnicRejectReason || "CNIC rejected — update docs with support"}
+          </p>
+        ) : (
+          <Badge tone="marigold">Pending admin approval</Badge>
+        )}
+      </Card>
+    );
+  }
+
+  if (!status) {
+    return (
+      <Card className="space-y-4">
+        <div>
+          <p className="text-12 font-bold uppercase tracking-wide text-sun">
+            Step 1 · Required
+          </p>
+          <h2 className="mt-1 font-display text-22 font-bold">
+            Register your {label}
+          </h2>
+          <p className="mt-2 text-14 text-muted">
+            Add make, model, plate and licence. Admin will review, then you can
+            offer seats on your dashboard.
+          </p>
+        </div>
+        <Button className="w-full" onClick={() => router.push("/driver/setup")}>
+          Register {label} details
+        </Button>
+      </Card>
+    );
+  }
+
+  if (status === "pending") {
+    const v = me.vehicle!;
+    return (
+      <Card className="space-y-3">
+        <Badge tone="marigold">Waiting for admin</Badge>
+        <h2 className="font-display text-20 font-bold">
+          {label === "bike" ? "Bike" : "Car"} submitted
+        </h2>
+        <p className="text-14 text-muted">
+          {v.make} {v.model} · {v.plate} · {v.color}
+        </p>
+        <p className="text-14 text-muted">
+          You can&apos;t offer seats until an admin approves this vehicle.
+        </p>
+        <Button
+          variant="secondary"
+          className="w-full"
+          onClick={() => router.push("/driver/setup")}
+        >
+          Edit details
+        </Button>
+      </Card>
+    );
+  }
+
+  // rejected
+  return (
+    <Card className="space-y-3">
+      <Badge tone="red">Rejected</Badge>
+      <h2 className="font-display text-20 font-bold">
+        Update your {label} details
+      </h2>
+      <p className="text-14 font-semibold text-red">
+        {me.vehicle?.rejectReason || "Documents unclear — please resubmit"}
+      </p>
+      <Button className="w-full" onClick={() => router.push("/driver/setup")}>
+        Fix &amp; resubmit
+      </Button>
+    </Card>
+  );
+}
+
 function OfferSeat({
   commuteType,
+  vehicleKind,
   routes,
   requests,
   postRoute,
@@ -198,6 +350,7 @@ function OfferSeat({
   settings,
 }: {
   commuteType: CommuteType;
+  vehicleKind: VehicleKind;
   routes: ReturnType<typeof useHumSafar>["routes"];
   requests: ReturnType<typeof useHumSafar>["bookings"];
   postRoute: ReturnType<typeof useHumSafar>["postRoute"];
@@ -210,17 +363,28 @@ function OfferSeat({
   const meta = commuteMeta(commuteType);
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
+  const [fromLat, setFromLat] = useState<number | undefined>();
+  const [fromLng, setFromLng] = useState<number | undefined>();
+  const [toLat, setToLat] = useState<number | undefined>();
+  const [toLng, setToLng] = useState<number | undefined>();
+  const [distanceKm, setDistanceKm] = useState<number | undefined>();
+  const [durationMin, setDurationMin] = useState<number | undefined>();
   const [placeLabel, setPlaceLabel] = useState(meta.examples[0] || "");
   const [time, setTime] = useState(
     commuteType === "airport" ? "05:30" : commuteType === "event" ? "18:00" : "08:15"
   );
-  const [seats, setSeats] = useState(2);
+  const [seats, setSeats] = useState(vehicleKind === "bike" ? 1 : 2);
+
+  useEffect(() => {
+    setSeats(vehicleKind === "bike" ? 1 : 2);
+  }, [vehicleKind]);
   const suggested = suggestRate(
     from || "Lahore",
     to || "Gulberg",
     { minRate: settings.minRate, maxRate: settings.maxRate },
     settings.perKm,
-    seats
+    seats,
+    distanceKm
   );
   const [rate, setRate] = useState(suggested.mid);
   const days: Weekday[] = meta.recurringDefault
@@ -229,7 +393,13 @@ function OfferSeat({
 
   useEffect(() => {
     setFrom("");
-    setTo(commuteType === "airport" ? "Allama Iqbal Airport" : "");
+    setTo("");
+    setFromLat(undefined);
+    setFromLng(undefined);
+    setToLat(undefined);
+    setToLng(undefined);
+    setDistanceKm(undefined);
+    setDurationMin(undefined);
     setPlaceLabel(meta.examples[0] || "");
     setTime(
       commuteType === "airport"
@@ -302,6 +472,9 @@ function OfferSeat({
           <p className="text-14 text-muted">
             {r.time} · {r.seatsLeft} seats · you keep Rs {r.rate}
             {r.placeLabel ? ` · ${r.placeLabel}` : ""}
+            {r.distanceKm != null
+              ? ` · ~${r.distanceKm} km${r.durationMin != null ? ` / ${r.durationMin} min` : ""}`
+              : ""}
           </p>
           <Button
             variant="secondary"
@@ -319,37 +492,41 @@ function OfferSeat({
       <Card className="space-y-4">
         <div>
           <h2 className="font-display text-20 font-bold">
-            Offer a seat · {meta.title}
+            Offer a {vehicleKind === "bike" ? "bike" : "car"} seat · {meta.title}
           </h2>
           <p className="text-14 text-muted">
-            You set the price. You keep the full seat amount.
+            Map your building → home. You keep the full seat amount.
           </p>
         </div>
 
-        <label className="block">
-          <span className="field-label">
-            <MapPin className="me-1 inline size-4 text-teal" />
-            From
-          </span>
-          <input
-            className="input"
-            value={from}
-            onChange={(e) => setFrom(e.target.value)}
-            placeholder={meta.hintFrom}
-          />
-        </label>
-        <label className="block">
-          <span className="field-label">
-            <MapPin className="me-1 inline size-4 text-sun" />
-            To
-          </span>
-          <input
-            className="input"
-            value={to}
-            onChange={(e) => setTo(e.target.value)}
-            placeholder={meta.hintTo}
-          />
-        </label>
+        <RouteMap
+          key={`offer-${commuteType}`}
+          fromLabel={
+            <>
+              <MapPin className="me-1 inline size-4 text-teal" />
+              From
+            </>
+          }
+          toLabel={
+            <>
+              <MapPin className="me-1 inline size-4 text-sun" />
+              To
+            </>
+          }
+          fromPlaceholder={meta.hintFrom}
+          toPlaceholder={meta.hintTo}
+          onChange={(ends) => {
+            setFrom(ends.from?.label || "");
+            setTo(ends.to?.label || "");
+            setFromLat(ends.from?.lat);
+            setFromLng(ends.from?.lng);
+            setToLat(ends.to?.lat);
+            setToLng(ends.to?.lng);
+            setDistanceKm(ends.distanceKm);
+            setDurationMin(ends.durationMin);
+          }}
+        />
+
         <label className="block">
           <span className="field-label">
             {commuteType === "office"
@@ -382,30 +559,40 @@ function OfferSeat({
             />
           </label>
           <label className="block">
-            <span className="field-label">Empty seats</span>
+            <span className="field-label">
+              {vehicleKind === "bike" ? "Passenger seats" : "Empty seats"}
+            </span>
             <input
               className="input"
               type="number"
               min={1}
-              max={4}
+              max={vehicleKind === "bike" ? 1 : 4}
               value={seats}
               onChange={(e) => setSeats(Number(e.target.value))}
+              disabled={vehicleKind === "bike"}
             />
           </label>
         </div>
 
         <div>
-          <span className="field-label">
-            Your seat price · recommended Rs {suggested.min}–{suggested.max}
-          </span>
+          <span className="field-label">Your seat price (you decide)</span>
           <input
             className="input"
             type="number"
+            min={1}
             value={rate}
             onChange={(e) => setRate(Number(e.target.value))}
           />
-          <p className="mt-2 text-14 font-semibold text-teal">
-            You keep Rs {rate} · rider pays HumSafar fee separately
+          <p className="mt-2 text-14 text-muted">
+            Suggestion only (~Rs {settings.perKm}/km ÷ seats · ~{suggested.km}{" "}
+            km):{" "}
+            <span className="font-semibold text-ink">
+              Rs {suggested.min}–{suggested.max}
+            </span>
+            . Final price is yours.
+          </p>
+          <p className="mt-1 text-14 font-semibold text-teal">
+            You keep Rs {rate || 0} · rider pays HumSafar fee separately
           </p>
         </div>
 
@@ -418,9 +605,19 @@ function OfferSeat({
         <Button
           className="w-full"
           onClick={() => {
+            if (!from.trim() || !to.trim()) {
+              show("Pick From and To on the map");
+              return;
+            }
             const res = postRoute({
               from,
               to,
+              fromLat,
+              fromLng,
+              toLat,
+              toLng,
+              distanceKm,
+              durationMin,
               direction: "home_to_office",
               time,
               seats,
@@ -443,10 +640,14 @@ function OfferSeat({
 
 function FindSeat({
   commuteType,
+  rideKind,
+  onRideKindChange,
   searchRoutes,
   settings,
 }: {
   commuteType: CommuteType;
+  rideKind: VehicleKind;
+  onRideKindChange: (k: VehicleKind) => void;
   searchRoutes: ReturnType<typeof useHumSafar>["searchRoutes"];
   settings: ReturnType<typeof useHumSafar>["settings"];
 }) {
@@ -469,6 +670,11 @@ function FindSeat({
     if (commuteType === "airport") setTo("Allama Iqbal Airport");
   }, [commuteType]);
 
+  useEffect(() => {
+    setSearched(false);
+    setResults([]);
+  }, [rideKind]);
+
   function runSearch() {
     setLoading(true);
     setSearched(true);
@@ -480,6 +686,7 @@ function FindSeat({
           ...searchRoutes(from, to, {
             commuteType,
             category: commuteType === "women" ? "women" : "all",
+            vehicleKind: rideKind,
           }),
         ].sort((a, b) => a.time.localeCompare(b.time))
       );
@@ -492,30 +699,61 @@ function FindSeat({
       <Card className="space-y-4">
         <div>
           <h2 className="font-display text-20 font-bold">{meta.title}</h2>
-          <p className="text-14 text-muted">{meta.blurb}</p>
+          <p className="text-14 text-muted">
+            {meta.blurb} Pick car or bike, then search From → To.
+          </p>
         </div>
 
-        <label className="block">
-          <span className="field-label">From</span>
-          <input
-            className="input"
-            value={from}
-            onChange={(e) => setFrom(e.target.value)}
-            placeholder={meta.hintFrom}
-          />
-        </label>
-        <label className="block">
-          <span className="field-label">To</span>
-          <input
-            className="input"
-            value={to}
-            onChange={(e) => setTo(e.target.value)}
-            placeholder={meta.hintTo}
-          />
-        </label>
+        <div>
+          <span className="field-label">I want to go by</span>
+          <div className="mt-2 grid grid-cols-2 gap-3">
+            {(
+              [
+                ["car", "Car", "/vehicles/car.svg"],
+                ["bike", "Bike", "/vehicles/bike.svg"],
+              ] as const
+            ).map(([k, label, src]) => (
+              <button
+                key={k}
+                type="button"
+                className={`overflow-hidden rounded-2xl border-2 text-start transition ${
+                  rideKind === k
+                    ? "border-teal shadow-[0_0_0_1px_var(--teal,#0d9488)]"
+                    : "border-black/10"
+                }`}
+                onClick={() => onRideKindChange(k)}
+              >
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={src}
+                  alt=""
+                  className="h-24 w-full object-cover"
+                />
+                <div className="bg-white px-3 py-2.5">
+                  <p className="text-16 font-bold">{label}</p>
+                  <p className="text-12 text-muted">
+                    {k === "bike" ? "Share a bike seat" : "Share a car seat"}
+                  </p>
+                </div>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <RouteMap
+          key={`find-${commuteType}`}
+          fromLabel="From"
+          toLabel="To"
+          fromPlaceholder={meta.hintFrom}
+          toPlaceholder={meta.hintTo}
+          onChange={(ends) => {
+            setFrom(ends.from?.label || "");
+            setTo(ends.to?.label || "");
+          }}
+        />
 
         <Button className="w-full" onClick={runSearch}>
-          Find seats in {meta.short}
+          Find {rideKind} seats in {meta.short}
         </Button>
       </Card>
 
@@ -584,6 +822,9 @@ function SeatCard({
     <Card className="space-y-3 animate-rise">
       <div className="flex flex-wrap gap-2">
         <CommuteTypeBadge id={route.commuteType} />
+        <Badge tone="mist">
+          {(route.vehicleKind ?? "car") === "bike" ? "Bike" : "Car"}
+        </Badge>
         {route.category === "women" || route.commuteType === "women" ? (
           <GirlsOnlyBadge />
         ) : null}
@@ -613,6 +854,11 @@ function SeatCard({
       <p className="text-14 text-muted">
         Leaves {route.time} · {route.seatsLeft} seats · {owner.vehicle?.make}{" "}
         {owner.vehicle?.model}
+        {route.distanceKm != null
+          ? ` · ~${route.distanceKm} km${
+              route.durationMin != null ? ` / ${route.durationMin} min` : ""
+            }`
+          : ""}
       </p>
 
       <div className="flex flex-wrap gap-2">

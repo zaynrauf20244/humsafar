@@ -6,8 +6,9 @@ import { AuthPictureSlider } from "@/components/AuthPictureSlider";
 import { Button, Card, Chip, Stepper, useToast } from "@/components/ui";
 import type { CommuteType } from "@/lib/commute-types";
 import { formatCnic } from "@/lib/seed";
-import { useHumSafar } from "@/lib/store";
-import type { Gender, UserRole } from "@/lib/types";
+import { personaLabel } from "@/lib/roles";
+import { homeModeForUser, useHumSafar } from "@/lib/store";
+import type { Gender, UserRole, VehicleKind } from "@/lib/types";
 
 const TYPES: CommuteType[] = [
   "office",
@@ -24,7 +25,10 @@ export default function JoinPage() {
   const {
     pendingPhone,
     pendingCnic,
+    pendingRole,
+    pendingVehicleKind,
     setPendingRole,
+    setPendingVehicleKind,
     completeProfile,
     saveVehicle,
     me,
@@ -32,8 +36,17 @@ export default function JoinPage() {
   } = useHumSafar();
   const router = useRouter();
   const { show } = useToast();
-  const [step, setStep] = useState(1);
-  const [role, setRole] = useState<UserRole>("passenger");
+  const roleFromSignup =
+    pendingRole === "driver" ||
+    pendingRole === "passenger" ||
+    pendingRole === "both";
+  const [step, setStep] = useState(roleFromSignup ? 2 : 1);
+  const [role, setRole] = useState<UserRole>(
+    roleFromSignup ? pendingRole! : "passenger"
+  );
+  const [vehicleKind, setVehicleKind] = useState<VehicleKind>(
+    pendingVehicleKind === "bike" ? "bike" : "car"
+  );
   const [name, setName] = useState("");
   const [gender, setGender] = useState<Gender>("male");
   const [age, setAge] = useState(22);
@@ -43,12 +56,18 @@ export default function JoinPage() {
   const [commuteType, setCommuteType] = useState<CommuteType>("office");
   const cnic = pendingCnic || "";
 
-  const [make, setMake] = useState("Honda");
-  const [model, setModel] = useState("City");
+  const [make, setMake] = useState(
+    pendingVehicleKind === "bike" ? "Honda" : "Honda"
+  );
+  const [model, setModel] = useState(
+    pendingVehicleKind === "bike" ? "CG 125" : "City"
+  );
   const [year, setYear] = useState(2020);
-  const [color, setColor] = useState("White");
+  const [color, setColor] = useState(
+    pendingVehicleKind === "bike" ? "Black" : "White"
+  );
   const [plate, setPlate] = useState("");
-  const [seats, setSeats] = useState(3);
+  const [seats, setSeats] = useState(pendingVehicleKind === "bike" ? 1 : 3);
   const [licenceExpiry, setLicenceExpiry] = useState("2027-12-01");
 
   const onType = useCallback((id: CommuteType) => setCommuteType(id), []);
@@ -59,10 +78,27 @@ export default function JoinPage() {
       "type"
     ) as CommuteType | null;
     if (t && TYPES.includes(t)) setCommuteType(t);
-    if (me) router.replace(`/?type=${commuteType}&mode=find`);
+    if (me)
+      router.replace(`/?type=${commuteType}&mode=${homeModeForUser(me)}`);
     else if (!pendingPhone || !pendingCnic) router.replace("/login");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hydrated, me, pendingPhone, pendingCnic, router]);
+
+  useEffect(() => {
+    if (!roleFromSignup || !pendingRole) return;
+    setRole(pendingRole);
+    setStep(2);
+  }, [roleFromSignup, pendingRole]);
+
+  useEffect(() => {
+    if (pendingVehicleKind !== "bike" && pendingVehicleKind !== "car") return;
+    setVehicleKind(pendingVehicleKind);
+    if (pendingVehicleKind === "bike") {
+      setModel("CG 125");
+      setColor("Black");
+      setSeats(1);
+    }
+  }, [pendingVehicleKind]);
 
   function nextProfile() {
     setError("");
@@ -98,19 +134,44 @@ export default function JoinPage() {
     }
     show("Welcome to HumSafar");
     if (role === "driver" || role === "both") setStep(3);
-    else router.replace(`/?type=${commuteType}&mode=find`);
+    else
+      router.replace(
+        `/?type=${commuteType}&mode=${homeModeForUser({ role, activeRole: "passenger" })}`
+      );
   }
 
   function finishVehicle() {
     saveVehicle(
-      { make, model, year, color, plate, seats },
+      {
+        kind: vehicleKind,
+        make,
+        model,
+        year,
+        color,
+        plate,
+        seats: vehicleKind === "bike" ? 1 : seats,
+        status: "pending",
+      },
       "licence-live.jpg",
       licenceExpiry
     );
-    router.replace(`/?type=${commuteType}&mode=find`);
+    router.replace(
+      `/?type=${commuteType}&mode=${homeModeForUser({
+        role,
+        activeRole: role === "passenger" ? "passenger" : "driver",
+      })}`
+    );
   }
 
-  const totalSteps = role === "passenger" ? 2 : 3;
+  const needsVehicle = role === "driver" || role === "both";
+  const totalSteps = roleFromSignup
+    ? needsVehicle
+      ? 2
+      : 1
+    : needsVehicle
+      ? 3
+      : 2;
+  const displayStep = roleFromSignup ? step - 1 : step;
 
   return (
     <main className="uber-landing !min-h-0">
@@ -125,9 +186,9 @@ export default function JoinPage() {
               <AuthPictureSlider value={commuteType} onChange={onType} />
             </div>
 
-            <Stepper step={step} total={totalSteps} />
+            <Stepper step={displayStep} total={totalSteps} />
 
-            {step === 1 ? (
+            {step === 1 && !roleFromSignup ? (
               <div className="space-y-3 animate-rise">
                 <h1 className="uber-h2 !text-[28px]">How will you use HumSafar?</h1>
                 <p className="text-14 text-[var(--uber-mute)]">
@@ -137,26 +198,39 @@ export default function JoinPage() {
                   [
                     [
                       "passenger",
-                      "Find a seat",
-                      "Ride with a car owner on your road",
+                      null,
+                      "I’m a passenger",
+                      "Find a car or bike seat on your road",
                     ],
                     [
                       "driver",
-                      "Offer a seat",
-                      "You already drive — share empty seats",
+                      "car",
+                      "I’m a car owner",
+                      "Offer empty car seats on your commute",
+                    ],
+                    [
+                      "driver",
+                      "bike",
+                      "I’m a bike owner",
+                      "Offer a bike ride on your commute",
                     ],
                     [
                       "both",
+                      "car",
                       "I do both",
                       "Offer some days, find a seat on others",
                     ],
                   ] as const
-                ).map(([id, label, hint]) => (
+                ).map(([id, kind, label, hint]) => (
                   <button
-                    key={id}
+                    key={`${id}-${kind || "none"}`}
                     type="button"
                     onClick={() => {
                       setRole(id);
+                      setPendingRole(id);
+                      const vk = kind === "bike" ? "bike" : kind === "car" ? "car" : null;
+                      setPendingVehicleKind(vk);
+                      if (vk) setVehicleKind(vk);
                       setStep(2);
                     }}
                     className="w-full rounded-2xl border border-[var(--uber-line)] bg-[var(--uber-soft)] p-5 text-start transition hover:border-black"
@@ -174,6 +248,19 @@ export default function JoinPage() {
                   <h1 className="uber-h2 !text-[28px]">A bit about you</h1>
                   <p className="mt-1 text-14 text-[var(--uber-mute)]">
                     Keeps everyone safer on the road.
+                    {role !== "admin" ? (
+                      <>
+                        {" "}
+                        Signing up as{" "}
+                        <span className="font-semibold text-black">
+                          {personaLabel(
+                            role,
+                            role === "passenger" ? null : vehicleKind
+                          )}
+                        </span>
+                        .
+                      </>
+                    ) : null}
                   </p>
                 </div>
                 <label className="block">
@@ -257,9 +344,13 @@ export default function JoinPage() {
                 <Button
                   variant="ghost"
                   className="w-full"
-                  onClick={() => setStep(1)}
+                  onClick={() =>
+                    roleFromSignup
+                      ? router.push("/login")
+                      : setStep(1)
+                  }
                 >
-                  Back
+                  {roleFromSignup ? "Change role on sign up" : "Back"}
                 </Button>
               </Card>
             ) : null}
@@ -267,11 +358,37 @@ export default function JoinPage() {
             {step === 3 ? (
               <Card className="space-y-3 animate-rise !shadow-none">
                 <div>
-                  <h1 className="uber-h2 !text-[28px]">Your car</h1>
+                  <h1 className="uber-h2 !text-[28px]">
+                    {vehicleKind === "bike" ? "Your bike" : "Your car"}
+                  </h1>
                   <p className="mt-1 text-14 text-[var(--uber-mute)]">
-                    So passengers recognize your car.
+                    Admin will approve your{" "}
+                    {vehicleKind === "bike" ? "bike" : "car"} before you can
+                    offer seats.
                   </p>
                 </div>
+                {!pendingVehicleKind ? (
+                  <div className="flex gap-2">
+                    {(
+                      [
+                        ["car", "Car"],
+                        ["bike", "Bike"],
+                      ] as const
+                    ).map(([k, label]) => (
+                      <Chip
+                        key={k}
+                        active={vehicleKind === k}
+                        onClick={() => {
+                          setVehicleKind(k);
+                          setPendingVehicleKind(k);
+                          setSeats(k === "bike" ? 1 : 3);
+                        }}
+                      >
+                        {label}
+                      </Chip>
+                    ))}
+                  </div>
+                ) : null}
                 <div className="grid grid-cols-2 gap-3">
                   <Field label="Make" value={make} set={setMake} />
                   <Field label="Model" value={model} set={setModel} />
@@ -283,17 +400,21 @@ export default function JoinPage() {
                   <Field label="Color" value={color} set={setColor} />
                 </div>
                 <Field label="Number plate" value={plate} set={setPlate} />
-                <label className="block">
-                  <span className="field-label">Empty seats (1–4)</span>
-                  <input
-                    className="uber-input"
-                    type="number"
-                    min={1}
-                    max={4}
-                    value={seats}
-                    onChange={(e) => setSeats(Number(e.target.value))}
-                  />
-                </label>
+                {vehicleKind === "bike" ? (
+                  <p className="text-14 text-muted">Bike rides · 1 passenger seat</p>
+                ) : (
+                  <label className="block">
+                    <span className="field-label">Empty seats (1–4)</span>
+                    <input
+                      className="uber-input"
+                      type="number"
+                      min={1}
+                      max={4}
+                      value={seats}
+                      onChange={(e) => setSeats(Number(e.target.value))}
+                    />
+                  </label>
+                )}
                 <label className="block">
                   <span className="field-label">Licence expiry</span>
                   <input

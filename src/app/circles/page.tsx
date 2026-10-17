@@ -14,7 +14,7 @@ import {
 } from "lucide-react";
 import { Card } from "@/components/ui";
 import { COMMUTE_TYPES, type CommuteType } from "@/lib/commute-types";
-import { useHumSafar } from "@/lib/store";
+import { homeModeForUser, useHumSafar } from "@/lib/store";
 
 const ICONS: Record<CommuteType, typeof Building2> = {
   office: Building2,
@@ -66,7 +66,9 @@ export default function CirclesPage() {
               type="button"
               className="card w-full space-y-2 p-4 text-start transition active:scale-[0.99]"
               onClick={() =>
-                router.push(`/?type=${c.id}&mode=find`)
+                router.push(
+                  `/?type=${c.id}&mode=${homeModeForUser(me)}`
+                )
               }
             >
               <div className="flex items-start gap-3">

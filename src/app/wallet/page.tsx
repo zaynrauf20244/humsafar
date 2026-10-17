@@ -1,31 +1,96 @@
 "use client";
 
-import { useState } from "react";
+import Link from "next/link";
+import { useMemo, useState } from "react";
 import { Button, Card, ScreenStates, useToast } from "@/components/ui";
 import { useHumSafar } from "@/lib/store";
+import type { WalletTxType } from "@/lib/types";
+
+function typeLabel(type: WalletTxType) {
+  switch (type) {
+    case "topup":
+      return "Top-up";
+    case "fee":
+      return "Booking fee";
+    case "bonus":
+      return "Bonus";
+    case "adjustment":
+      return "Admin adjust";
+    case "refund":
+      return "Refund";
+    default:
+      return type;
+  }
+}
+
+function formatWhen(iso: string) {
+  try {
+    return new Date(iso).toLocaleString(undefined, {
+      day: "numeric",
+      month: "short",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  } catch {
+    return iso;
+  }
+}
 
 export default function WalletPage() {
-  const { me, walletTx, topUpWallet, settings } = useHumSafar();
+  const { me, walletTx, topUpWallet, settings, hydrated } = useHumSafar();
   const { show } = useToast();
   const [amount, setAmount] = useState(200);
   const [method, setMethod] = useState<"JazzCash" | "Easypaisa">("JazzCash");
-  const mine = walletTx.filter((x) => x.userId === me?.id);
 
-  if (!me) return null;
+  const mine = useMemo(
+    () =>
+      walletTx
+        .filter((x) => x.userId === me?.id)
+        .slice()
+        .sort(
+          (a, b) =>
+            new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+        ),
+    [walletTx, me?.id]
+  );
+
+  if (!hydrated) {
+    return (
+      <main className="page">
+        <p className="text-muted">Loading…</p>
+      </main>
+    );
+  }
+
+  if (!me) {
+    return (
+      <main className="page">
+        <Link href="/login" className="btn btn-primary">
+          Login
+        </Link>
+      </main>
+    );
+  }
 
   return (
     <main className="page max-w-lg space-y-4">
       <div>
-        <h1 className="font-display text-26 font-bold">Wallet</h1>
+        <p className="label-caps">Your money</p>
+        <h1 className="font-display text-26 font-bold">Credits</h1>
         <p className="mt-1 text-14 text-muted">
-          Seat cash goes to the car owner. HumSafar booking fee is separate.
+          See your balance and every credit / debit. Seat cash still goes to the
+          owner — HumSafar fee uses credits.
         </p>
       </div>
 
       <Card className="commute-hero !p-5">
-        <p className="relative z-[1] text-14 text-white/75">Balance</p>
-        <p className="relative z-[1] mt-1 font-display text-32 font-extrabold">
-          Rs {me.walletBalance}
+        <p className="relative z-[1] text-14 text-white/75">Available credits</p>
+        <p className="relative z-[1] mt-1 font-display text-32 font-extrabold text-white">
+          Rs {me.walletBalance.toLocaleString()}
+        </p>
+        <p className="relative z-[1] mt-2 text-12 text-white/70">
+          {mine.length} transaction{mine.length === 1 ? "" : "s"} in history
         </p>
       </Card>
 
@@ -48,9 +113,7 @@ export default function WalletPage() {
           </Button>
         </div>
         <label className="block">
-          <span className="field-label">
-            Minimum Rs {settings.minTopup}
-          </span>
+          <span className="field-label">Amount · min Rs {settings.minTopup}</span>
           <input
             className="input"
             type="number"
@@ -59,31 +122,56 @@ export default function WalletPage() {
             onChange={(e) => setAmount(Number(e.target.value))}
           />
         </label>
+        <div className="flex flex-wrap gap-2">
+          {[200, 500, 1000].map((n) => (
+            <button
+              key={n}
+              type="button"
+              className="chip"
+              onClick={() => setAmount(n)}
+            >
+              Rs {n}
+            </button>
+          ))}
+        </div>
         <Button
           className="w-full"
           onClick={() => {
             const r = topUpWallet(amount, method);
-            show(r.ok ? `${method} added` : r.error || "");
+            show(r.ok ? `Added Rs ${amount} via ${method}` : r.error || "");
           }}
         >
-          Add money
+          Add Rs {amount} credits
         </Button>
       </Card>
 
-      <h2 className="font-display text-20 font-bold">History</h2>
-      <ScreenStates empty={mine.length === 0} emptyTitle="No history yet">
+      <div>
+        <h2 className="font-display text-20 font-bold">Credit history</h2>
+        <p className="mt-1 text-14 text-muted">Newest first</p>
+      </div>
+      <ScreenStates
+        empty={mine.length === 0}
+        emptyTitle="No history yet"
+        emptyBody="Top-ups, booking fees, bonuses, and admin adjusts show here."
+      >
         <div className="space-y-2">
           {mine.map((tx) => (
-            <Card key={tx.id} className="flex items-center justify-between !py-3">
-              <div>
+            <Card
+              key={tx.id}
+              className="flex items-start justify-between gap-3 !py-3"
+            >
+              <div className="min-w-0">
                 <p className="font-semibold">{tx.note}</p>
-                <p className="text-12 text-muted">{tx.type}</p>
+                <p className="text-12 text-muted">
+                  {typeLabel(tx.type)} · {formatWhen(tx.createdAt)}
+                </p>
               </div>
               <p
-                className={`font-bold ${tx.amount >= 0 ? "text-teal" : "text-red"}`}
+                className={`shrink-0 font-bold tabular-nums ${
+                  tx.amount >= 0 ? "text-teal" : "text-red"
+                }`}
               >
-                {tx.amount >= 0 ? "+" : ""}
-                {tx.amount}
+                {tx.amount >= 0 ? "+" : "−"}Rs {Math.abs(tx.amount)}
               </p>
             </Card>
           ))}

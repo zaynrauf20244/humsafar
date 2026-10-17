@@ -18,6 +18,8 @@ import {
   isValidPkPhone,
   normalizeCnic,
   normalizePkPhone,
+  SEED_ROUTES,
+  SEED_USERS,
   uid,
 } from "./seed";
 import type {
@@ -32,6 +34,7 @@ import type {
   User,
   UserRole,
   Vehicle,
+  VehicleKind,
   VerifyStatus,
   Weekday,
 } from "./types";
@@ -42,15 +45,76 @@ import {
   riderBlockedFromWomenRoute,
   womenRouteDriverOk,
 } from "./safety";
+import {
+  isLiveConfigured,
+  liveFetchSnapshot,
+  liveInsertChatMessage,
+  liveSeedAll,
+  liveSubscribe,
+  liveUpsertBooking,
+  liveUpsertComplaint,
+  liveUpsertRoute,
+  liveUpsertSettings,
+  liveUpsertSos,
+  liveUpsertUser,
+  liveUpsertWalletTx,
+} from "./live-db";
 
 const STORAGE_KEY = "humsafar-auth-v2";
+const SESSION_KEY = "humsafar-session-v1";
+
+type SessionSlice = Pick<
+  AppState,
+  | "sessionUserId"
+  | "locale"
+  | "introDone"
+  | "pendingPhone"
+  | "pendingCnic"
+  | "authIntent"
+  | "pendingRole"
+  | "pendingVehicleKind"
+  | "adminStepOk"
+  | "savedPlaces"
+  | "otp"
+>;
+
+function loadSession(): Partial<SessionSlice> {
+  if (typeof window === "undefined") return {};
+  try {
+    const raw = localStorage.getItem(SESSION_KEY);
+    return raw ? (JSON.parse(raw) as SessionSlice) : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveSession(s: AppState) {
+  const slice: SessionSlice = {
+    sessionUserId: s.sessionUserId,
+    locale: s.locale,
+    introDone: s.introDone,
+    pendingPhone: s.pendingPhone,
+    pendingCnic: s.pendingCnic,
+    authIntent: s.authIntent,
+    pendingRole: s.pendingRole,
+    pendingVehicleKind: s.pendingVehicleKind,
+    adminStepOk: s.adminStepOk,
+    savedPlaces: s.savedPlaces,
+    otp: s.otp,
+  };
+  localStorage.setItem(SESSION_KEY, JSON.stringify(slice));
+}
 
 type Store = AppState & {
   hydrated: boolean;
+  /** True when Supabase env is set and snapshot loaded */
+  liveMode: boolean;
   me: User | null;
+  refreshLive: () => Promise<void>;
   setLocale: (l: Locale) => void;
   setIntroDone: () => void;
   setPendingRole: (role: UserRole | null) => void;
+  setPendingVehicleKind: (kind: VehicleKind | null) => void;
   setActiveRole: (role: ActiveRole) => void;
   requestOtp: (
     phone: string,
@@ -78,6 +142,12 @@ type Store = AppState & {
   postRoute: (input: {
     from: string;
     to: string;
+    fromLat?: number;
+    fromLng?: number;
+    toLat?: number;
+    toLng?: number;
+    distanceKm?: number;
+    durationMin?: number;
     direction: RoutePost["direction"];
     time: string;
     seats: number;
@@ -96,6 +166,7 @@ type Store = AppState & {
     opts?: {
       category?: RideCategory | "all";
       commuteType?: CommuteType | "all";
+      vehicleKind?: VehicleKind | "all";
     }
   ) => RoutePost[];
   requestBooking: (
@@ -115,6 +186,11 @@ type Store = AppState & {
   sendChat: (chatId: string, text: string) => { ok: boolean; warn?: string };
   rateUser: (bookingId: string, userId: string, stars: number) => void;
   setCnicStatus: (
+    userId: string,
+    status: VerifyStatus,
+    reason?: string
+  ) => void;
+  setVehicleStatus: (
     userId: string,
     status: VerifyStatus,
     reason?: string
@@ -171,16 +247,99 @@ function canRide(role: UserRole) {
 export function HumSafarProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<AppState>(defaultState);
   const [hydrated, setHydrated] = useState(false);
+  const [liveMode, setLiveMode] = useState(false);
 
-  useEffect(() => {
-    setState(load());
-    setHydrated(true);
+  const refreshLive = useCallback(async () => {
+    if (!isLiveConfigured()) return;
+    try {
+      let snap = await liveFetchSnapshot();
+      if (snap && snap.users.length === 0) {
+        await liveSeedAll(SEED_USERS, SEED_ROUTES);
+        snap = await liveFetchSnapshot();
+      }
+      if (!snap) return;
+      setState((s) => ({
+        ...s,
+        users: snap.users,
+        routes: snap.routes,
+        bookings: snap.bookings,
+        chats: snap.chats,
+        walletTx: snap.walletTx,
+        sosAlerts: snap.sosAlerts,
+        complaints: snap.complaints,
+        settings: snap.settings,
+        rateBounds: snap.rateBounds,
+      }));
+    } catch (e) {
+      console.error("[HumSafar] live refresh failed", e);
+    }
   }, []);
 
   useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      if (isLiveConfigured()) {
+        try {
+          let snap = await liveFetchSnapshot();
+          if (snap && snap.users.length === 0) {
+            await liveSeedAll(SEED_USERS, SEED_ROUTES);
+            snap = await liveFetchSnapshot();
+          }
+          if (!cancelled && snap) {
+            const session = loadSession();
+            setState({
+              ...defaultState(),
+              ...snap,
+              sessionUserId: session.sessionUserId ?? null,
+              locale: session.locale ?? "en",
+              introDone: session.introDone ?? false,
+              pendingPhone: session.pendingPhone ?? null,
+              pendingCnic: session.pendingCnic ?? null,
+              authIntent: session.authIntent ?? null,
+              pendingRole: session.pendingRole ?? null,
+              pendingVehicleKind: session.pendingVehicleKind ?? null,
+              adminStepOk: session.adminStepOk ?? false,
+              savedPlaces: session.savedPlaces ?? {},
+              otp: session.otp ?? defaultState().otp,
+            });
+            setLiveMode(true);
+          } else if (!cancelled) {
+            setState(load());
+            setLiveMode(false);
+          }
+        } catch (e) {
+          console.error("[HumSafar] live hydrate failed, using localStorage", e);
+          if (!cancelled) {
+            setState(load());
+            setLiveMode(false);
+          }
+        }
+      } else {
+        setState(load());
+        setLiveMode(false);
+      }
+      if (!cancelled) setHydrated(true);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!hydrated || !liveMode) return;
+    return liveSubscribe(() => {
+      void refreshLive();
+    });
+  }, [hydrated, liveMode, refreshLive]);
+
+  useEffect(() => {
     if (!hydrated) return;
+    if (liveMode) {
+      saveSession(state);
+      return;
+    }
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-  }, [state, hydrated]);
+  }, [state, hydrated, liveMode]);
 
   const me = useMemo(
     () => state.users.find((u) => u.id === state.sessionUserId) ?? null,
@@ -199,15 +358,19 @@ export function HumSafarProvider({ children }: { children: ReactNode }) {
     setState((s) => ({ ...s, pendingRole: role }));
   }, []);
 
+  const setPendingVehicleKind = useCallback((kind: VehicleKind | null) => {
+    setState((s) => ({ ...s, pendingVehicleKind: kind }));
+  }, []);
+
   const setActiveRole = useCallback(
     (role: ActiveRole) => {
       if (!me) return;
+      const next = { ...me, activeRole: role };
       setState((s) => ({
         ...s,
-        users: s.users.map((u) =>
-          u.id === me.id ? { ...u, activeRole: role } : u
-        ),
+        users: s.users.map((u) => (u.id === me.id ? next : u)),
       }));
+      void liveUpsertUser(next);
     },
     [me]
   );
@@ -348,6 +511,12 @@ export function HumSafarProvider({ children }: { children: ReactNode }) {
         role === "driver" || role === "both" ? "driver" : "passenger";
       const bonus =
         canDrive(role) && role !== "admin" ? state.settings.signupBonus : 0;
+      const preferred =
+        role === "driver" || role === "both"
+          ? state.pendingVehicleKind === "bike"
+            ? "bike"
+            : "car"
+          : undefined;
       const user: User = {
         id: uid("usr"),
         phone,
@@ -362,6 +531,7 @@ export function HumSafarProvider({ children }: { children: ReactNode }) {
         rating: 5,
         ratingCount: 0,
         walletBalance: bonus,
+        preferredVehicleKind: preferred,
         emergencyContacts: data.emergencyPhone
           ? [
               {
@@ -374,6 +544,17 @@ export function HumSafarProvider({ children }: { children: ReactNode }) {
         introSeen: true,
         createdAt: new Date().toISOString(),
       };
+      const bonusTx =
+        bonus > 0
+          ? {
+              id: uid("tx"),
+              userId: user.id,
+              type: "bonus" as const,
+              amount: bonus,
+              note: "Signup bonus",
+              createdAt: new Date().toISOString(),
+            }
+          : null;
       setState((s) => ({
         ...s,
         users: [...s.users, user],
@@ -382,26 +563,18 @@ export function HumSafarProvider({ children }: { children: ReactNode }) {
         pendingCnic: null,
         authIntent: null,
         pendingRole: null,
-        walletTx:
-          bonus > 0
-            ? [
-                {
-                  id: uid("tx"),
-                  userId: user.id,
-                  type: "bonus",
-                  amount: bonus,
-                  note: "Signup bonus",
-                  createdAt: new Date().toISOString(),
-                },
-                ...s.walletTx,
-              ]
-            : s.walletTx,
+        // Keep until vehicle is registered so dashboard knows car vs bike
+        pendingVehicleKind: preferred ?? null,
+        walletTx: bonusTx ? [bonusTx, ...s.walletTx] : s.walletTx,
       }));
+      void liveUpsertUser(user);
+      if (bonusTx) void liveUpsertWalletTx(bonusTx);
       return { ok: true };
     },
     [
       state.pendingPhone,
       state.pendingCnic,
+      state.pendingVehicleKind,
       state.users,
       state.settings.signupBonus,
     ]
@@ -419,23 +592,28 @@ export function HumSafarProvider({ children }: { children: ReactNode }) {
         )
       )
         return;
+      const kind = vehicle.kind === "bike" ? "bike" : "car";
+      const nextUser: User = {
+        ...me,
+        preferredVehicleKind: kind,
+        vehicle: {
+          ...vehicle,
+          kind,
+          seats:
+            kind === "bike" ? 1 : Math.min(4, Math.max(1, vehicle.seats)),
+          status: "pending",
+          rejectReason: undefined,
+        },
+        licence: { fileName: licenceFileName, expiry: licenceExpiry },
+        role: me.role === "passenger" ? "both" : me.role,
+        activeRole: "driver",
+      };
       setState((s) => ({
         ...s,
-        users: s.users.map((u) =>
-          u.id === me.id
-            ? {
-                ...u,
-                vehicle: {
-                  ...vehicle,
-                  seats: Math.min(4, Math.max(1, vehicle.seats)),
-                },
-                licence: { fileName: licenceFileName, expiry: licenceExpiry },
-                role: u.role === "passenger" ? "both" : u.role,
-                activeRole: "driver",
-              }
-            : u
-        ),
+        users: s.users.map((u) => (u.id === me.id ? nextUser : u)),
+        pendingVehicleKind: null,
       }));
+      void liveUpsertUser(nextUser);
     },
     [me, state.users]
   );
@@ -444,6 +622,12 @@ export function HumSafarProvider({ children }: { children: ReactNode }) {
     (input: {
       from: string;
       to: string;
+      fromLat?: number;
+      fromLng?: number;
+      toLat?: number;
+      toLng?: number;
+      distanceKm?: number;
+      durationMin?: number;
       direction: RoutePost["direction"];
       time: string;
       seats: number;
@@ -455,15 +639,24 @@ export function HumSafarProvider({ children }: { children: ReactNode }) {
       recurring?: boolean;
     }) => {
       if (!me || !canDrive(me.role))
-        return { ok: false, error: "Car owners only" };
+        return { ok: false, error: "Owners only" };
       if (me.cnicStatus !== "approved")
         return { ok: false, error: "CNIC not approved yet" };
-      if (!me.vehicle) return { ok: false, error: "Add vehicle first" };
+      if (!me.vehicle) return { ok: false, error: "Register your vehicle first" };
+      if (me.vehicle.status === "pending")
+        return { ok: false, error: "Vehicle waiting for admin approval" };
+      if (me.vehicle.status === "rejected")
+        return {
+          ok: false,
+          error: me.vehicle.rejectReason || "Vehicle rejected — update details",
+        };
       if (me.licence && new Date(me.licence.expiry) < new Date())
         return { ok: false, error: "Licence expired" };
       if (input.from.trim().toLowerCase() === input.to.trim().toLowerCase())
         return { ok: false, error: "Pickup and drop cannot be same" };
-      if (input.seats > me.vehicle.seats)
+      const kind: VehicleKind = me.vehicle.kind === "bike" ? "bike" : "car";
+      const maxSeats = kind === "bike" ? 1 : me.vehicle.seats;
+      if (input.seats > maxSeats)
         return { ok: false, error: "Seats exceed vehicle" };
       const meta = commuteMeta(input.commuteType);
       const genderCat: RideCategory =
@@ -480,6 +673,10 @@ export function HumSafarProvider({ children }: { children: ReactNode }) {
       ) {
         return { ok: false, error: "Women-only needs an approved woman car owner" };
       }
+      if (!Number.isFinite(input.rate) || input.rate < 1) {
+        return { ok: false, error: "Enter a seat price (Rs)" };
+      }
+      // Suggested band is advisory only — owner sets any price they want.
       const { min, max } = suggestRate(
         input.from,
         input.to,
@@ -488,22 +685,20 @@ export function HumSafarProvider({ children }: { children: ReactNode }) {
           maxRate: state.settings.maxRate,
         },
         state.settings.perKm,
-        input.seats
+        input.seats,
+        input.distanceKm
       );
-      if (
-        input.rate < state.settings.minRate ||
-        input.rate > state.settings.maxRate
-      ) {
-        return {
-          ok: false,
-          error: `Rate must be Rs ${state.settings.minRate}–${state.settings.maxRate}`,
-        };
-      }
       const route: RoutePost = {
         id: uid("rt"),
         driverId: me.id,
         from: input.from.trim(),
         to: input.to.trim(),
+        fromLat: input.fromLat,
+        fromLng: input.fromLng,
+        toLat: input.toLat,
+        toLng: input.toLng,
+        distanceKm: input.distanceKm,
+        durationMin: input.durationMin,
         direction: input.direction,
         time: input.time,
         flexMinutes: 10,
@@ -515,6 +710,7 @@ export function HumSafarProvider({ children }: { children: ReactNode }) {
         category: genderCat,
         commuteType: input.commuteType,
         placeLabel: input.placeLabel?.trim() || undefined,
+        vehicleKind: kind,
         rate: input.rate,
         suggestedMin: min,
         suggestedMax: max,
@@ -522,27 +718,35 @@ export function HumSafarProvider({ children }: { children: ReactNode }) {
         createdAt: new Date().toISOString(),
       };
       setState((s) => ({ ...s, routes: [route, ...s.routes] }));
+      void liveUpsertRoute(route);
       return { ok: true };
     },
     [me, state.settings]
   );
 
-  const pauseRouteToday = useCallback((routeId: string) => {
-    setState((s) => ({
-      ...s,
-      routes: s.routes.map((r) =>
-        r.id === routeId ? { ...r, pausedToday: true, active: false } : r
-      ),
-    }));
-  }, []);
+  const pauseRouteToday = useCallback(
+    (routeId: string) => {
+      setState((s) => {
+        const next = s.routes.map((r) =>
+          r.id === routeId ? { ...r, pausedToday: true, active: false } : r
+        );
+        const updated = next.find((r) => r.id === routeId);
+        if (updated) void liveUpsertRoute(updated);
+        return { ...s, routes: next };
+      });
+    },
+    []
+  );
 
   const removeRoute = useCallback((routeId: string) => {
-    setState((s) => ({
-      ...s,
-      routes: s.routes.map((r) =>
+    setState((s) => {
+      const next = s.routes.map((r) =>
         r.id === routeId ? { ...r, active: false } : r
-      ),
-    }));
+      );
+      const updated = next.find((r) => r.id === routeId);
+      if (updated) void liveUpsertRoute(updated);
+      return { ...s, routes: next };
+    });
   }, []);
 
   const searchRoutes = useCallback(
@@ -552,10 +756,12 @@ export function HumSafarProvider({ children }: { children: ReactNode }) {
       opts?: {
         category?: RideCategory | "all";
         commuteType?: CommuteType | "all";
+        vehicleKind?: VehicleKind | "all";
       }
     ) => {
       const category = opts?.category ?? "all";
       const commuteType = opts?.commuteType ?? "all";
+      const vehicleKind = opts?.vehicleKind ?? "all";
       const f = from.trim().toLowerCase();
       const t = to.trim().toLowerCase();
       return state.routes.filter((r) => {
@@ -563,7 +769,11 @@ export function HumSafarProvider({ children }: { children: ReactNode }) {
         const driver = state.users.find((u) => u.id === r.driverId);
         if (!driver || driver.banned || driver.cnicStatus !== "approved")
           return false;
+        if (driver.vehicle?.status && driver.vehicle.status !== "approved")
+          return false;
         if (commuteType !== "all" && r.commuteType !== commuteType) return false;
+        const rk = r.vehicleKind ?? driver.vehicle?.kind ?? "car";
+        if (vehicleKind !== "all" && rk !== vehicleKind) return false;
         if (category !== "all" && r.category !== category) return false;
         if (
           (category === "women" || r.commuteType === "women") &&
@@ -631,6 +841,13 @@ export function HumSafarProvider({ children }: { children: ReactNode }) {
         createdAt: new Date().toISOString(),
         chatId,
       };
+      const sysMsg = {
+        id: uid("m"),
+        senderId: "system",
+        text: "Chat started. Phone numbers stay hidden.",
+        at: new Date().toLocaleTimeString(),
+        system: true as const,
+      };
       setState((s) => ({
         ...s,
         bookings: [booking, ...s.bookings],
@@ -638,37 +855,30 @@ export function HumSafarProvider({ children }: { children: ReactNode }) {
           {
             id: chatId,
             bookingId: booking.id,
-            messages: [
-              {
-                id: uid("m"),
-                senderId: "system",
-                text: "Chat started. Phone numbers stay hidden.",
-                at: new Date().toLocaleTimeString(),
-                system: true,
-              },
-            ],
+            messages: [sysMsg],
           },
           ...s.chats,
         ],
       }));
+      void liveUpsertBooking(booking);
+      void liveInsertChatMessage(booking.id, chatId, sysMsg);
       return { ok: true, id: booking.id };
     },
     [me, state.routes, state.bookings, state.settings.feePercent]
   );
 
-  const cancelBooking = useCallback(
-    (bookingId: string, reason: string) => {
-      setState((s) => ({
-        ...s,
-        bookings: s.bookings.map((b) =>
-          b.id === bookingId && b.status === "requested"
-            ? { ...b, status: "cancelled", cancelReason: reason }
-            : b
-        ),
-      }));
-    },
-    []
-  );
+  const cancelBooking = useCallback((bookingId: string, reason: string) => {
+    setState((s) => {
+      const next = s.bookings.map((b) =>
+        b.id === bookingId && b.status === "requested"
+          ? { ...b, status: "cancelled" as const, cancelReason: reason }
+          : b
+      );
+      const updated = next.find((b) => b.id === bookingId);
+      if (updated) void liveUpsertBooking(updated);
+      return { ...s, bookings: next };
+    });
+  }, []);
 
   const respondBooking = useCallback(
     (bookingId: string, accept: boolean) => {
@@ -685,39 +895,42 @@ export function HumSafarProvider({ children }: { children: ReactNode }) {
             result = { ok: false, error: "No seats" };
             return s;
           }
+          const updatedRoute = { ...route, seatsLeft: route.seatsLeft - 1 };
+          const updatedBooking = {
+            ...booking,
+            status: "accepted" as const,
+          };
+          const sysMsg = {
+            id: uid("m"),
+            senderId: "system",
+            text: "Seat confirmed. Pay the car owner in cash — they keep the full seat price.",
+            at: new Date().toLocaleTimeString(),
+            system: true as const,
+          };
+          void liveUpsertRoute(updatedRoute);
+          void liveUpsertBooking(updatedBooking);
+          void liveInsertChatMessage(booking.id, booking.chatId, sysMsg);
           return {
             ...s,
             routes: s.routes.map((r) =>
-              r.id === booking.routeId
-                ? { ...r, seatsLeft: r.seatsLeft - 1 }
-                : r
+              r.id === booking.routeId ? updatedRoute : r
             ),
             bookings: s.bookings.map((b) =>
-              b.id === bookingId ? { ...b, status: "accepted" as const } : b
+              b.id === bookingId ? updatedBooking : b
             ),
             chats: s.chats.map((c) =>
               c.id === booking.chatId
-                ? {
-                    ...c,
-                    messages: [
-                      ...c.messages,
-                      {
-                        id: uid("m"),
-                        senderId: "system",
-                        text: "Seat confirmed. Pay the car owner in cash — they keep the full seat price.",
-                        at: new Date().toLocaleTimeString(),
-                        system: true,
-                      },
-                    ],
-                  }
+                ? { ...c, messages: [...c.messages, sysMsg] }
                 : c
             ),
           };
         }
+        const rejected = { ...booking, status: "rejected" as const };
+        void liveUpsertBooking(rejected);
         return {
           ...s,
           bookings: s.bookings.map((b) =>
-            b.id === bookingId ? { ...b, status: "rejected" as const } : b
+            b.id === bookingId ? rejected : b
           ),
         };
       });
@@ -727,14 +940,16 @@ export function HumSafarProvider({ children }: { children: ReactNode }) {
   );
 
   const markArrived = useCallback((bookingId: string) => {
-    setState((s) => ({
-      ...s,
-      bookings: s.bookings.map((b) =>
+    setState((s) => {
+      const next = s.bookings.map((b) =>
         b.id === bookingId && b.status === "accepted"
-          ? { ...b, status: "ongoing" }
+          ? { ...b, status: "ongoing" as const }
           : b
-      ),
-    }));
+      );
+      const updated = next.find((b) => b.id === bookingId);
+      if (updated) void liveUpsertBooking(updated);
+      return { ...s, bookings: next };
+    });
   }, []);
 
   const completeRide = useCallback(
@@ -748,28 +963,57 @@ export function HumSafarProvider({ children }: { children: ReactNode }) {
           return s;
         const fee = booking.platformFee;
         // Passenger booking-fee model: owner keeps full seat rate; fee is HumSafar's cut from rider.
-        const next: AppState = {
-          ...s,
-          bookings: s.bookings.map((b) =>
-            b.id === bookingId
-              ? {
-                  ...b,
-                  status: "completed",
-                  cashReceived,
-                }
-              : b
-          ),
-          walletTx: [
-            {
-              id: uid("tx"),
-              userId: booking.passengerId,
-              type: "fee",
-              amount: -fee,
-              note: `HumSafar booking fee — ${booking.id}`,
+        const doneBooking = {
+          ...booking,
+          status: "completed" as const,
+          cashReceived,
+        };
+        const feeTx = {
+          id: uid("tx"),
+          userId: booking.passengerId,
+          type: "fee" as const,
+          amount: -fee,
+          note: `HumSafar booking fee — ${booking.id}`,
+          createdAt: new Date().toISOString(),
+        };
+        const sysMsg = {
+          id: uid("m"),
+          senderId: "system",
+          text: cashReceived
+            ? `Ride done. Owner gets Rs ${booking.rate} cash. HumSafar fee Rs ${fee} (rider).`
+            : "Cash not received — complaint opened.",
+          at: new Date().toLocaleTimeString(),
+          system: true as const,
+        };
+        const complaint = cashReceived
+          ? null
+          : {
+              id: uid("cmp"),
+              fromUserId: booking.driverId,
+              againstUserId: booking.passengerId,
+              bookingId,
+              text: "Cash not received",
+              status: "open" as const,
               createdAt: new Date().toISOString(),
-            },
-            ...s.walletTx,
-          ],
+            };
+        const nextUsers = s.users.map((u) =>
+          u.id === booking.passengerId
+            ? { ...u, walletBalance: Math.max(0, u.walletBalance - fee) }
+            : u
+        );
+        const passenger = nextUsers.find((u) => u.id === booking.passengerId);
+        void liveUpsertBooking(doneBooking);
+        void liveUpsertWalletTx(feeTx);
+        void liveInsertChatMessage(booking.id, booking.chatId, sysMsg);
+        if (passenger) void liveUpsertUser(passenger);
+        if (complaint) void liveUpsertComplaint(complaint);
+        return {
+          ...s,
+          users: nextUsers,
+          bookings: s.bookings.map((b) =>
+            b.id === bookingId ? doneBooking : b
+          ),
+          walletTx: [feeTx, ...s.walletTx],
           chats: s.chats.map((c) =>
             c.id === booking.chatId
               ? {
@@ -777,37 +1021,14 @@ export function HumSafarProvider({ children }: { children: ReactNode }) {
                   closedAt: new Date(
                     Date.now() + 24 * 60 * 60 * 1000
                   ).toISOString(),
-                  messages: [
-                    ...c.messages,
-                    {
-                      id: uid("m"),
-                      senderId: "system",
-                      text: cashReceived
-                        ? `Ride done. Owner gets Rs ${booking.rate} cash. HumSafar fee Rs ${fee} (rider).`
-                        : "Cash not received — complaint opened.",
-                      at: new Date().toLocaleTimeString(),
-                      system: true,
-                    },
-                  ],
+                  messages: [...c.messages, sysMsg],
                 }
               : c
           ),
-          complaints: cashReceived
-            ? s.complaints
-            : [
-                {
-                  id: uid("cmp"),
-                  fromUserId: booking.driverId,
-                  againstUserId: booking.passengerId,
-                  bookingId,
-                  text: "Cash not received",
-                  status: "open",
-                  createdAt: new Date().toISOString(),
-                },
-                ...s.complaints,
-              ],
+          complaints: complaint
+            ? [complaint, ...s.complaints]
+            : s.complaints,
         };
-        return next;
       });
     },
     []
@@ -818,25 +1039,22 @@ export function HumSafarProvider({ children }: { children: ReactNode }) {
       if (!me) return { ok: false, error: "Login required" };
       if (amount < state.settings.minTopup)
         return { ok: false, error: `Min Rs ${state.settings.minTopup}` };
+      const tx = {
+        id: uid("tx"),
+        userId: me.id,
+        type: "topup" as const,
+        amount,
+        note: `${method} top-up`,
+        createdAt: new Date().toISOString(),
+      };
+      const nextUser = { ...me, walletBalance: me.walletBalance + amount };
       setState((s) => ({
         ...s,
-        users: s.users.map((u) =>
-          u.id === me.id
-            ? { ...u, walletBalance: u.walletBalance + amount }
-            : u
-        ),
-        walletTx: [
-          {
-            id: uid("tx"),
-            userId: me.id,
-            type: "topup",
-            amount,
-            note: `${method} top-up`,
-            createdAt: new Date().toISOString(),
-          },
-          ...s.walletTx,
-        ],
+        users: s.users.map((u) => (u.id === me.id ? nextUser : u)),
+        walletTx: [tx, ...s.walletTx],
       }));
+      void liveUpsertUser(nextUser);
+      void liveUpsertWalletTx(tx);
       return { ok: true };
     },
     [me, state.settings.minTopup]
@@ -844,25 +1062,29 @@ export function HumSafarProvider({ children }: { children: ReactNode }) {
 
   const adjustWallet = useCallback(
     (userId: string, amount: number, note: string) => {
-      setState((s) => ({
-        ...s,
-        users: s.users.map((u) =>
-          u.id === userId
-            ? { ...u, walletBalance: Math.max(0, u.walletBalance + amount) }
-            : u
-        ),
-        walletTx: [
-          {
-            id: uid("tx"),
-            userId,
-            type: "adjustment",
-            amount,
-            note: note || "Admin adjustment",
-            createdAt: new Date().toISOString(),
-          },
-          ...s.walletTx,
-        ],
-      }));
+      setState((s) => {
+        const target = s.users.find((u) => u.id === userId);
+        if (!target) return s;
+        const nextUser = {
+          ...target,
+          walletBalance: Math.max(0, target.walletBalance + amount),
+        };
+        const tx = {
+          id: uid("tx"),
+          userId,
+          type: "adjustment" as const,
+          amount,
+          note: note || "Admin adjustment",
+          createdAt: new Date().toISOString(),
+        };
+        void liveUpsertUser(nextUser);
+        void liveUpsertWalletTx(tx);
+        return {
+          ...s,
+          users: s.users.map((u) => (u.id === userId ? nextUser : u)),
+          walletTx: [tx, ...s.walletTx],
+        };
+      });
     },
     []
   );
@@ -874,25 +1096,26 @@ export function HumSafarProvider({ children }: { children: ReactNode }) {
       const safeText = phoneLike
         ? redactPhoneNumbers(text.trim())
         : text.trim();
-      setState((s) => ({
-        ...s,
-        chats: s.chats.map((c) =>
-          c.id !== chatId
-            ? c
-            : {
-                ...c,
-                messages: [
-                  ...c.messages,
-                  {
-                    id: uid("m"),
-                    senderId: me.id,
-                    text: safeText,
-                    at: new Date().toLocaleTimeString(),
-                  },
-                ],
-              }
-        ),
-      }));
+      const msg = {
+        id: uid("m"),
+        senderId: me.id,
+        text: safeText,
+        at: new Date().toLocaleTimeString(),
+      };
+      setState((s) => {
+        const thread = s.chats.find((c) => c.id === chatId);
+        if (thread) {
+          void liveInsertChatMessage(thread.bookingId, chatId, msg);
+        }
+        return {
+          ...s,
+          chats: s.chats.map((c) =>
+            c.id !== chatId
+              ? c
+              : { ...c, messages: [...c.messages, msg] }
+          ),
+        };
+      });
       return { ok: true, warn: phoneLike ? "phoneWarn" : undefined };
     },
     [me]
@@ -932,9 +1155,8 @@ export function HumSafarProvider({ children }: { children: ReactNode }) {
 
   const setCnicStatus = useCallback(
     (userId: string, status: VerifyStatus, reason?: string) => {
-      setState((s) => ({
-        ...s,
-        users: s.users.map((u) =>
+      setState((s) => {
+        const next = s.users.map((u) =>
           u.id === userId
             ? {
                 ...u,
@@ -942,49 +1164,80 @@ export function HumSafarProvider({ children }: { children: ReactNode }) {
                 cnicRejectReason: status === "rejected" ? reason : undefined,
               }
             : u
-        ),
-      }));
+        );
+        const updated = next.find((u) => u.id === userId);
+        if (updated) void liveUpsertUser(updated);
+        return { ...s, users: next };
+      });
+    },
+    []
+  );
+
+  const setVehicleStatus = useCallback(
+    (userId: string, status: VerifyStatus, reason?: string) => {
+      setState((s) => {
+        const next = s.users.map((u) => {
+          if (u.id !== userId || !u.vehicle) return u;
+          return {
+            ...u,
+            vehicle: {
+              ...u.vehicle,
+              status,
+              rejectReason: status === "rejected" ? reason : undefined,
+            },
+          };
+        });
+        const updated = next.find((u) => u.id === userId);
+        if (updated) void liveUpsertUser(updated);
+        return { ...s, users: next };
+      });
     },
     []
   );
 
   const banUser = useCallback((userId: string) => {
-    setState((s) => ({
-      ...s,
-      users: s.users.map((u) =>
+    setState((s) => {
+      const next = s.users.map((u) =>
         u.id === userId ? { ...u, banned: true } : u
-      ),
-      sessionUserId: s.sessionUserId === userId ? null : s.sessionUserId,
-    }));
+      );
+      const updated = next.find((u) => u.id === userId);
+      if (updated) void liveUpsertUser(updated);
+      return {
+        ...s,
+        users: next,
+        sessionUserId: s.sessionUserId === userId ? null : s.sessionUserId,
+      };
+    });
   }, []);
 
   const unblockUser = useCallback((userId: string) => {
-    setState((s) => ({
-      ...s,
-      users: s.users.map((u) =>
+    setState((s) => {
+      const next = s.users.map((u) =>
         u.id === userId ? { ...u, banned: false } : u
-      ),
-    }));
+      );
+      const updated = next.find((u) => u.id === userId);
+      if (updated) void liveUpsertUser(updated);
+      return { ...s, users: next };
+    });
   }, []);
 
   const addComplaint = useCallback(
     (againstUserId: string, text: string, bookingId?: string) => {
       if (!me) return;
+      const c = {
+        id: uid("cmp"),
+        fromUserId: me.id,
+        againstUserId,
+        bookingId,
+        text,
+        status: "open" as const,
+        createdAt: new Date().toISOString(),
+      };
       setState((s) => ({
         ...s,
-        complaints: [
-          {
-            id: uid("cmp"),
-            fromUserId: me.id,
-            againstUserId,
-            bookingId,
-            text,
-            status: "open",
-            createdAt: new Date().toISOString(),
-          },
-          ...s.complaints,
-        ],
+        complaints: [c, ...s.complaints],
       }));
+      void liveUpsertComplaint(c);
     },
     [me]
   );
@@ -998,17 +1251,24 @@ export function HumSafarProvider({ children }: { children: ReactNode }) {
       setState((s) => {
         const c = s.complaints.find((x) => x.id === id);
         if (!c) return s;
+        const nextComplaint = { ...c, status, adminNote: note };
+        void liveUpsertComplaint(nextComplaint);
+        const nextUsers =
+          status === "banned"
+            ? s.users.map((u) =>
+                u.id === c.againstUserId ? { ...u, banned: true } : u
+              )
+            : s.users;
+        if (status === "banned") {
+          const banned = nextUsers.find((u) => u.id === c.againstUserId);
+          if (banned) void liveUpsertUser(banned);
+        }
         return {
           ...s,
           complaints: s.complaints.map((x) =>
-            x.id === id ? { ...x, status, adminNote: note } : x
+            x.id === id ? nextComplaint : x
           ),
-          users:
-            status === "banned"
-              ? s.users.map((u) =>
-                  u.id === c.againstUserId ? { ...u, banned: true } : u
-                )
-              : s.users,
+          users: nextUsers,
         };
       });
     },
@@ -1016,14 +1276,18 @@ export function HumSafarProvider({ children }: { children: ReactNode }) {
   );
 
   const setSettings = useCallback((patch: Partial<AppState["settings"]>) => {
-    setState((s) => ({
-      ...s,
-      settings: { ...s.settings, ...patch },
-      rateBounds: {
-        minRate: patch.minRate ?? s.settings.minRate,
-        maxRate: patch.maxRate ?? s.settings.maxRate,
-      },
-    }));
+    setState((s) => {
+      const settings = { ...s.settings, ...patch };
+      void liveUpsertSettings(settings);
+      return {
+        ...s,
+        settings,
+        rateBounds: {
+          minRate: patch.minRate ?? s.settings.minRate,
+          maxRate: patch.maxRate ?? s.settings.maxRate,
+        },
+      };
+    });
   }, []);
 
   const createMatchAlert = useCallback(
@@ -1081,6 +1345,7 @@ export function HumSafarProvider({ children }: { children: ReactNode }) {
       pendingCnic: null,
       authIntent: null,
       pendingRole: null,
+      pendingVehicleKind: null,
       adminStepOk: false,
     }));
   }, []);
@@ -1096,29 +1361,28 @@ export function HumSafarProvider({ children }: { children: ReactNode }) {
         location: "31.5204° N, 74.3587° E (demo)",
         status: "live" as const,
       };
+      void liveUpsertSos(alert);
       setState((s) => {
         const booking = bookingId
           ? s.bookings.find((b) => b.id === bookingId)
           : undefined;
+        const sysMsg = {
+          id: uid("m"),
+          senderId: "system",
+          text: msg,
+          at: new Date().toLocaleTimeString(),
+          system: true as const,
+        };
+        if (booking) {
+          void liveInsertChatMessage(booking.id, booking.chatId, sysMsg);
+        }
         return {
           ...s,
           sosAlerts: [alert, ...s.sosAlerts],
           chats: booking
             ? s.chats.map((c) =>
                 c.id === booking.chatId
-                  ? {
-                      ...c,
-                      messages: [
-                        ...c.messages,
-                        {
-                          id: uid("m"),
-                          senderId: "system",
-                          text: msg,
-                          at: new Date().toLocaleTimeString(),
-                          system: true,
-                        },
-                      ],
-                    }
+                  ? { ...c, messages: [...c.messages, sysMsg] }
                   : c
               )
             : s.chats,
@@ -1133,30 +1397,31 @@ export function HumSafarProvider({ children }: { children: ReactNode }) {
     (bookingId: string) => {
       const booking = state.bookings.find((b) => b.id === bookingId);
       if (!booking || !me) return;
-      setState((s) => ({
-        ...s,
-        bookings: s.bookings.map((b) =>
+      const msg = {
+        id: uid("m"),
+        senderId: me.id,
+        text: "Live location: 31.5204° N, 74.3587° E",
+        at: new Date().toLocaleTimeString(),
+      };
+      setState((s) => {
+        const nextBookings = s.bookings.map((b) =>
           b.id === bookingId && b.status === "accepted"
             ? { ...b, status: "ongoing" as const }
             : b
-        ),
-        chats: s.chats.map((c) =>
-          c.id === booking.chatId
-            ? {
-                ...c,
-                messages: [
-                  ...c.messages,
-                  {
-                    id: uid("m"),
-                    senderId: me.id,
-                    text: "Live location: 31.5204° N, 74.3587° E",
-                    at: new Date().toLocaleTimeString(),
-                  },
-                ],
-              }
-            : c
-        ),
-      }));
+        );
+        const updated = nextBookings.find((b) => b.id === bookingId);
+        if (updated) void liveUpsertBooking(updated);
+        void liveInsertChatMessage(booking.id, booking.chatId, msg);
+        return {
+          ...s,
+          bookings: nextBookings,
+          chats: s.chats.map((c) =>
+            c.id === booking.chatId
+              ? { ...c, messages: [...c.messages, msg] }
+              : c
+          ),
+        };
+      });
     },
     [state.bookings, me]
   );
@@ -1168,10 +1433,12 @@ export function HumSafarProvider({ children }: { children: ReactNode }) {
   const updateMe = useCallback(
     (patch: Partial<User>) => {
       if (!me) return;
+      const next = { ...me, ...patch };
       setState((s) => ({
         ...s,
-        users: s.users.map((u) => (u.id === me.id ? { ...u, ...patch } : u)),
+        users: s.users.map((u) => (u.id === me.id ? next : u)),
       }));
+      void liveUpsertUser(next);
     },
     [me]
   );
@@ -1179,19 +1446,15 @@ export function HumSafarProvider({ children }: { children: ReactNode }) {
   const blockUser = useCallback(
     (userId: string) => {
       if (!me) return;
+      const next = {
+        ...me,
+        blockedUserIds: Array.from(new Set([...me.blockedUserIds, userId])),
+      };
       setState((s) => ({
         ...s,
-        users: s.users.map((u) =>
-          u.id === me.id
-            ? {
-                ...u,
-                blockedUserIds: Array.from(
-                  new Set([...u.blockedUserIds, userId])
-                ),
-              }
-            : u
-        ),
+        users: s.users.map((u) => (u.id === me.id ? next : u)),
       }));
+      void liveUpsertUser(next);
     },
     [me]
   );
@@ -1200,10 +1463,13 @@ export function HumSafarProvider({ children }: { children: ReactNode }) {
     () => ({
       ...state,
       hydrated,
+      liveMode,
       me,
+      refreshLive,
       setLocale,
       setIntroDone,
       setPendingRole,
+      setPendingVehicleKind,
       setActiveRole,
       requestOtp,
       verifyOtp,
@@ -1223,6 +1489,7 @@ export function HumSafarProvider({ children }: { children: ReactNode }) {
       sendChat,
       rateUser,
       setCnicStatus,
+      setVehicleStatus,
       banUser,
       unblockUser,
       addComplaint,
@@ -1240,10 +1507,13 @@ export function HumSafarProvider({ children }: { children: ReactNode }) {
     [
       state,
       hydrated,
+      liveMode,
       me,
+      refreshLive,
       setLocale,
       setIntroDone,
       setPendingRole,
+      setPendingVehicleKind,
       setActiveRole,
       requestOtp,
       verifyOtp,
@@ -1263,6 +1533,7 @@ export function HumSafarProvider({ children }: { children: ReactNode }) {
       sendChat,
       rateUser,
       setCnicStatus,
+      setVehicleStatus,
       banUser,
       unblockUser,
       addComplaint,
@@ -1299,4 +1570,14 @@ export function effectiveRole(me: User | null): ActiveRole | "admin" | null {
   if (me.role === "both") return me.activeRole;
   if (me.role === "driver") return "driver";
   return "passenger";
+}
+
+/** Home screen: car owners land on Offer, riders on Find. */
+export function homeModeForUser(
+  me: Pick<User, "role" | "activeRole"> | null
+): "offer" | "find" {
+  if (!me) return "find";
+  if (me.role === "driver") return "offer";
+  if (me.role === "passenger" || me.role === "admin") return "find";
+  return me.activeRole === "driver" ? "offer" : "find";
 }

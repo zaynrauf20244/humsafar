@@ -2,7 +2,14 @@ import type { PriceTag, RateBounds } from "./types";
 
 export const PLATFORM_FEE_RATE = 0.1;
 
-/** Suggested = km × perKm ÷ seats (demo corridor distances). */
+/**
+ * Soft market reference for suggestions only (not enforced).
+ * ~Rs 50/km is a rough Pakistan economy-car ballpark used as a hint;
+ * carpool seat = (km × perKm) ÷ empty seats.
+ */
+export const SUGGEST_PER_KM_DEFAULT = 50;
+
+/** Suggested corridor distances when map km is missing (demo). */
 export function estimateKm(from: string, to: string) {
   const key = `${from}|${to}`.toLowerCase();
   if (key.includes("bahria") && key.includes("gulberg")) return 28;
@@ -12,22 +19,31 @@ export function estimateKm(from: string, to: string) {
   return 22;
 }
 
+/**
+ * Suggested seat band for the owner — advisory only.
+ * Owner may post any positive price; admin min/max only shape the hint band.
+ */
 export function suggestRate(
   from: string,
   to: string,
   bounds: RateBounds,
-  perKm = 35,
-  seats = 3
+  perKm = SUGGEST_PER_KM_DEFAULT,
+  seats = 3,
+  knownKm?: number
 ) {
-  const km = estimateKm(from, to);
+  const km =
+    knownKm != null && knownKm > 0
+      ? Math.round(knownKm * 10) / 10
+      : estimateKm(from, to);
   const mid = Math.round((km * perKm) / Math.max(1, seats));
-  const min = Math.max(bounds.minRate, mid - 60);
-  const max = Math.min(bounds.maxRate, mid + 40);
+  const min = Math.max(bounds.minRate, Math.round(mid * 0.7));
+  const max = Math.min(bounds.maxRate, Math.round(mid * 1.35));
   return {
     min,
     max,
-    mid: Math.round((min + max) / 2),
+    mid: Math.min(max, Math.max(min, mid)),
     km,
+    perKm,
     driverGets: (rate: number, feePercent: number) =>
       Math.round(rate - rate * (feePercent / 100)),
   };

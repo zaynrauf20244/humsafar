@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 200" fill="none">
+  <defs>
+    <linearGradient id="bsky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#FFF7ED"/>
+      <stop offset="100%" stop-color="#FFEDD5"/>
+    </linearGradient>
+    <linearGradient id="frame" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#EA580C"/>
+      <stop offset="100%" stop-color="#C2410C"/>
+    </linearGradient>
+  </defs>
+  <rect width="320" height="200" fill="url(#bsky)"/>
+  <ellipse cx="160" cy="172" rx="100" ry="9" fill="#EA580C" opacity=".12"/>
+  <circle cx="90" cy="148" r="28" stroke="#1C1917" stroke-width="6" fill="none"/>
+  <circle cx="90" cy="148" r="8" fill="#A8A29E"/>
+  <circle cx="230" cy="148" r="28" stroke="#1C1917" stroke-width="6" fill="none"/>
+  <circle cx="230" cy="148" r="8" fill="#A8A29E"/>
+  <path d="M90 148 L150 100 L210 148" stroke="url(#frame)" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M150 100 L150 78" stroke="url(#frame)" stroke-width="7" stroke-linecap="round"/>
+  <path d="M132 78h40" stroke="#1C1917" stroke-width="6" stroke-linecap="round"/>
+  <path d="M210 148 L168 118" stroke="url(#frame)" stroke-width="6" stroke-linecap="round"/>
+  <circle cx="168" cy="118" r="5" fill="#1C1917"/>
+  <path d="M158 118h20" stroke="#1C1917" stroke-width="4" stroke-linecap="round"/>
+  <path d="M90 148 L120 118" stroke="#78716C" stroke-width="4" stroke-linecap="round"/>
+</svg>

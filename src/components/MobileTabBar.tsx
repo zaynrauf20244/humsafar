@@ -5,9 +5,9 @@ import { usePathname } from "next/navigation";
 import {
   Home,
   LayoutGrid,
-  MessageCircle,
   Route,
   UserRound,
+  Wallet,
 } from "lucide-react";
 import { useHumSafar } from "@/lib/store";
 
@@ -32,7 +32,7 @@ export function MobileTabBar() {
     { href: "/", label: "Home", icon: Home },
     { href: "/circles", label: "Circles", icon: LayoutGrid },
     { href: "/rides", label: "Rides", icon: Route },
-    { href: "/chat", label: "Chat", icon: MessageCircle },
+    { href: "/wallet", label: "Credits", icon: Wallet },
     { href: "/profile", label: "You", icon: UserRound },
   ];
 
